@@ -1,0 +1,33 @@
+From: Chris Painter <chris@gobehindtheproduct.com>
+Subject: [PATCH] gradio_app: drop enable_face_tracking + head_tracker_type kwargs
+
+Upstream bug at commit 3785255: gradio_app.py passes
+`enable_face_tracking=` and `head_tracker_type=` to ClawBodyCore(...),
+but ClawBodyCore.__init__ does not accept either parameter, so launching
+the Gradio UI with `clawbody --gradio` raises TypeError immediately:
+
+  ClawBodyCore.__init__() got an unexpected keyword argument
+  'enable_face_tracking'
+
+Workaround: drop both kwargs from the launch site. Face tracking is
+unaffected for sim-only users (the simulator has no camera); when
+upstream wires the kwargs through to ClawBodyCore, this patch will
+fail to apply and we'll know to drop it.
+
+Apply with: patch -p1 < 0001-drop-unsupported-face-tracking-kwargs.patch
+---
+ src/reachy_mini_openclaw/gradio_app.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/src/reachy_mini_openclaw/gradio_app.py b/src/reachy_mini_openclaw/gradio_app.py
+--- a/src/reachy_mini_openclaw/gradio_app.py
++++ b/src/reachy_mini_openclaw/gradio_app.py
+@@ -59,8 +59,6 @@ def launch_gradio(
+                 robot_name=robot_name,
+                 enable_camera=enable_camera,
+                 enable_openclaw=enable_openclaw,
+-                enable_face_tracking=enable_face_tracking,
+-                head_tracker_type=head_tracker_type,
+             )
+
+             # Run in background thread

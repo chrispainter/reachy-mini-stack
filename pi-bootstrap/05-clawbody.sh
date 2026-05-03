@@ -39,6 +39,25 @@ if [ -f "$CB_DIR/.env.example" ] && [ ! -f "$CB_DIR/.env" ]; then
   chmod 600 "$CB_DIR/.env"
 fi
 
+# --- Local patches ---
+# Upstream bug (commit 3785255): gradio_app.py passes face_tracking kwargs to
+# ClawBodyCore() that __init__ doesn't accept. Patch lives in
+# ../clawbody-config/patches/. Reverse-apply check skips if already patched.
+PATCHES_DIR="$(cd "$(dirname "$0")/../clawbody-config/patches" 2>/dev/null && pwd || true)"
+if [ -n "$PATCHES_DIR" ] && [ -d "$PATCHES_DIR" ]; then
+  for patch in "$PATCHES_DIR"/*.patch; do
+    [ -f "$patch" ] || continue
+    if patch -p1 -d "$CB_DIR" --dry-run -R --silent < "$patch" >/dev/null 2>&1; then
+      echo "  -> $(basename "$patch") already applied"
+    elif patch -p1 -d "$CB_DIR" --dry-run --silent < "$patch" >/dev/null 2>&1; then
+      patch -p1 -d "$CB_DIR" < "$patch"
+      echo "  -> applied $(basename "$patch")"
+    else
+      echo "  -> $(basename "$patch") does not apply cleanly (upstream may have fixed it)"
+    fi
+  done
+fi
+
 echo
 echo "==> Verifying clawbody CLI"
 "$CB_DIR/.venv/bin/clawbody" --help 2>&1 | head -20 || echo "  (clawbody CLI not on PATH yet)"

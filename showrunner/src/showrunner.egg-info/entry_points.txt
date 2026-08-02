@@ -1,2 +1,0 @@
-[console_scripts]
-showrunner = showrunner.cli:main

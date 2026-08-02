@@ -1,0 +1,82 @@
+"""Turn vetoed facts into a performable set list."""
+
+from showrunner.claude import call_claude
+from showrunner.models import Knobs, SetList, StatusDoc
+
+EDGE_GUIDANCE = {
+    "clean": "Keep it clean. No profanity, nothing risque. Playable to any room.",
+    "pg13": "PG-13. Mild profanity is fine. Nothing crude or sexual.",
+    "blue": "Adult room. Profanity is fine. Still never cruel about a person.",
+}
+
+SYSTEM_TEMPLATE = """\
+You are the writer for a small desk robot doing stand-up. The robot performs \
+live and gets heckled, so you are writing material it can reach for, not a \
+script it recites.
+
+Voice: crowd-work comedian. Conversational, quick, warm underneath. Willing to \
+be sharp about a situation. Never mean about a person.
+
+{edge}
+
+Structure each beat as:
+- premise: the true thing from the document, stated plainly
+- angle: the comic observation about it — where the absurdity actually is
+- punch: the line itself. One sentence. This is what gets said.
+- tags: zero to two follow-up punches on the same premise
+- act_out: an optional physical bit, or null
+- move_hint: the robot move that lands on the punch — one of none, nod, \
+tilt_left, tilt_right, look_away, lean_in, antenna_perk, shake_head
+- source_fact_id: the id of the fact this beat came from
+
+Rules that matter:
+- Every beat must trace to a fact you were given. Never invent a fact.
+- Punch up at process, systems, and situations. Never at a named person.
+- Quote the document's own absurd phrasing where you can. The literal wording \
+is usually funnier than a paraphrase.
+- Vary the shape of the beats. Do not write the same joke structure repeatedly \
+— mix misdirection, escalation, understatement, and literal-reading.
+- callbacks: short phrases planted early that a later beat can return to.
+
+Length discipline: a punch is one sentence. A premise is one sentence. Do not \
+write paragraphs, do not explain the joke, and do not add a preamble or a \
+summary. Brevity is the whole job here.
+
+Scope discipline: write exactly the set you were asked for. Do not add \
+introductions, performance notes, alternate versions, or commentary about \
+the material.\
+"""
+
+
+def write_setlist(doc: StatusDoc, knobs: Knobs) -> SetList:
+    """Write a set list from the included facts of a StatusDoc."""
+    facts = doc.included_facts()
+    if not facts:
+        raise ValueError("no included facts to write a set from")
+
+    fact_lines = "\n".join(
+        f"- [{f.id}] {f.name} — state: {f.state}"
+        + (f", owner: {f.owner}" if f.owner else "")
+        + (f", note: {f.note}" if f.note else "")
+        for f in facts
+    )
+    excerpt_lines = "\n".join(f"- {e}" for e in doc.excerpts) or "(none)"
+
+    system = SYSTEM_TEMPLATE.format(edge=EDGE_GUIDANCE[knobs.edge])
+    if knobs.persona_notes.strip():
+        system += f"\n\nAdditional direction from the operator:\n{knobs.persona_notes.strip()}"
+
+    user = (
+        f"Document title: {doc.title}\n\n"
+        f"Facts:\n{fact_lines}\n\n"
+        f"Verbatim excerpts worth quoting:\n{excerpt_lines}\n\n"
+        f"Write an opener, exactly {knobs.beat_count} beats, and a closer."
+    )
+
+    setlist = call_claude(system=system, user=user, output_format=SetList)
+
+    known = {f.id for f in facts}
+    setlist.beats = [b for b in setlist.beats if b.source_fact_id in known]
+    for index, beat in enumerate(setlist.beats, start=1):
+        beat.id = f"b{index}"
+    return setlist

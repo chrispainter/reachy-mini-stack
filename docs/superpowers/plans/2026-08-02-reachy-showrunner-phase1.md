@@ -1613,7 +1613,11 @@ Expected: PASS (8 tests)
 
 - [ ] **Step 6: Start the server and click through it by hand**
 
-Run: `cd showrunner && python3 -m uvicorn showrunner.api:app --port 7861`
+Run: `cd showrunner && python3 -m uvicorn showrunner.api:build_app --factory --port 7861`
+
+(`build_app` stays a factory rather than replacing `app = create_app()`, so the
+Gradio import is not paid by tests or REST-only importers. Gradio 6 dropped
+`Textbox(show_copy_button=...)`; the console does not use it.)
 Then open `http://127.0.0.1:7861/` and run a document through Load → Facts → Set → Go. Confirm `curl http://127.0.0.1:7861/tools/get_set_list -X POST -d '{}' -H 'Content-Type: application/json'` returns the armed set.
 
 - [ ] **Step 7: Commit**

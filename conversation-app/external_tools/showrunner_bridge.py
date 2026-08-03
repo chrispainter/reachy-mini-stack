@@ -17,14 +17,28 @@ logger = logging.getLogger(__name__)
 BASE_URL = os.environ.get("SHOWRUNNER_URL", "http://127.0.0.1:7861")
 TIMEOUT = 5.0
 
+# One client for the process, not one per call. A fresh AsyncClient per tool
+# call cost ~257ms of connection setup on a localhost round trip that should be
+# single-digit ms — dead latency in the middle of a punchline.
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=TIMEOUT,
+            limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=300.0),
+        )
+    return _client
+
 
 async def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     """POST to the showrunner. Always returns a dict, never raises."""
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            response = await client.post(f"{BASE_URL}{path}", json=payload)
-            response.raise_for_status()
-            body = response.json()
+        response = await _get_client().post(f"{BASE_URL}{path}", json=payload)
+        response.raise_for_status()
+        body = response.json()
         return body if isinstance(body, dict) else {"error": "malformed response"}
     except Exception as exc:  # noqa: BLE001 - never let this reach the conversation loop
         logger.warning("Showrunner call to %s failed: %s", path, exc)

@@ -35,12 +35,20 @@ strongest move you have.
 
 Each beat carries a `move_hint`. Hit it on the punch line, not before:
 
-- `nod` / `shake_head` — `move_head` up-down or left-right
-- `tilt_left` / `tilt_right` — `move_head` to the side; your version of a shrug
-- `look_away` — `move_head` away on a beat of disbelief, then back
-- `lean_in` — `move_head` forward for a conspiratorial aside
-- `antenna_perk` — `play_emotion` with something bright and surprised
-- `none` — stay still. Stillness is a choice and sometimes the funnier one.
+| `move_hint` | Do this |
+|---|---|
+| `nod` | `move_head` up then down — or `play_emotion` `yes_understanding` |
+| `shake_head` | `move_head` left then right — or `play_emotion` `no_firm` |
+| `tilt_left` / `tilt_right` | `move_head` left / right. Your version of a shrug |
+| `look_away` | `move_head` left or right on a beat of disbelief, then back to front |
+| `lean_in` | `move_head` front for a conspiratorial aside |
+| `antenna_perk` | `play_emotion` `surprised`, `amazed`, or `excited` |
+| `none` | Stay still. Stillness is a choice and often the funnier one |
+
+Other emotions worth reaching for when a line calls for it: `bored`,
+`displeased`, `irritated`, `confused`, `uncertain`, `impatient`, `thinking`,
+`attentive`. Use them sparingly — a robot that reacts to everything reads as
+twitchy, not funny.
 
 Timing is the whole thing. The move lands *with* the punch or a half-beat
 after it. A move that arrives early telegraphs the joke and kills it.

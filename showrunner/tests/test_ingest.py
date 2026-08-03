@@ -55,4 +55,10 @@ def test_extract_facts_assigns_ids_when_claude_omits_them():
 def test_extract_facts_against_the_real_api():
     doc = extract_facts(FIXTURES.joinpath("episodes_table.md").read_text())
     assert doc.facts
-    assert any("BL-03" in f.name or "wifi" in f.note.lower() for f in doc.facts)
+    # The extractor chooses which field each detail lands in, and reuses the
+    # document's own ids when it has them (BL-03 rather than f2). Assert on the
+    # whole record — pinning a detail to one field tests the extractor's
+    # layout choices, not whether it read the document.
+    blob = " ".join(f.model_dump_json() for f in doc.facts).lower()
+    assert "bl-03" in blob
+    assert "wifi" in blob

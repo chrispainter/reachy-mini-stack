@@ -75,8 +75,20 @@ def write_setlist(doc: StatusDoc, knobs: Knobs) -> SetList:
 
     setlist = call_claude(system=system, user=user, output_format=SetList)
 
+    # Every beat must trace to a fact the operator kept. Beats citing an
+    # unknown id are dropped rather than performed — but dropping *all* of them
+    # means the writer ignored the ids entirely, which is a failure, not an
+    # empty set. Surfacing it beats handing the robot a silent blank.
     known = {f.id for f in facts}
-    setlist.beats = [b for b in setlist.beats if b.source_fact_id in known]
+    kept = [b for b in setlist.beats if b.source_fact_id in known]
+    if setlist.beats and not kept:
+        cited = sorted({b.source_fact_id for b in setlist.beats})
+        raise RuntimeError(
+            f"every beat cited an unknown fact id (got {cited}, expected "
+            f"{sorted(known)}) — the set would have been empty"
+        )
+
+    setlist.beats = kept
     for index, beat in enumerate(setlist.beats, start=1):
         beat.id = f"b{index}"
     return setlist

@@ -76,11 +76,25 @@ def test_beats_are_renumbered_for_stable_ids():
     assert result.beat_ids() == ["b1", "b2"]
 
 
-def test_beats_tracing_to_an_unknown_fact_are_dropped():
+def test_a_single_beat_tracing_to_an_unknown_fact_is_dropped():
+    mixed = SetList(
+        opener="o",
+        beats=[
+            Beat(id="b1", premise="p", angle="a", punch="x", source_fact_id="f1"),
+            Beat(id="b2", premise="p", angle="a", punch="y", source_fact_id="ghost"),
+        ],
+        closer="c",
+    )
+    with patch("showrunner.writer.call_claude", return_value=mixed):
+        result = write_setlist(_doc(), Knobs())
+    assert [b.source_fact_id for b in result.beats] == ["f1"]
+
+
+def test_all_beats_tracing_to_unknown_facts_raises_rather_than_going_silent():
     bad = _setlist(n=2, source="does-not-exist")
     with patch("showrunner.writer.call_claude", return_value=bad):
-        result = write_setlist(_doc(), Knobs())
-    assert result.beats == []
+        with pytest.raises(RuntimeError, match="unknown fact id"):
+            write_setlist(_doc(), Knobs())
 
 
 def test_write_setlist_rejects_a_doc_with_no_included_facts():
@@ -91,6 +105,12 @@ def test_write_setlist_rejects_a_doc_with_no_included_facts():
 
 @pytest.mark.live
 def test_write_setlist_against_the_real_api():
-    result = write_setlist(_doc(), Knobs(beat_count=3))
-    assert 1 <= len(result.beats) <= 3
+    """Assert the invariants, not the beat count — this call is sampled."""
+    doc = _doc()
+    result = write_setlist(doc, Knobs(beat_count=3))
     assert result.opener and result.closer
+    assert result.beats
+    included = {f.id for f in doc.included_facts()}
+    assert all(b.source_fact_id in included for b in result.beats)
+    assert all(b.punch.strip() for b in result.beats)
+    assert result.beat_ids() == [f"b{i}" for i in range(1, len(result.beats) + 1)]

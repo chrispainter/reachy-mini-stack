@@ -76,3 +76,17 @@ curl -X POST http://reachy-mini.local:8000/api/apps/restart-current-app
 ```
 
 Change the model in `hermes/config.yaml`, then re-run `deploy-pi.sh`.
+
+## Robot disk hygiene
+
+The robot's 14 GB card filled to 92% because the Reactions app pulled in GPU
+PyTorch (torch, triton and 15 `nvidia-*` CUDA packages, about 4.5 GB) on a
+robot with no NVIDIA GPU. On 2026-10-05 Reactions was removed and its orphaned
+packages uninstalled from `/venvs/apps_venv`, which brought the disk down to 59%.
+
+A systemd drop-in, `/etc/systemd/system/reachy-mini-daemon.service.d/cpu-torch.conf`,
+sets `UV_TORCH_BACKEND=cpu`, so app installs (the daemon uses `/opt/uv/uv`)
+only fetch CPU-only PyTorch from now on. To undo it, delete the file, then run
+`sudo systemctl daemon-reload` and restart the daemon.
+
+Check usage with `ssh pollen@reachy-mini.local 'df -h /; du -sh /venvs/*'`.

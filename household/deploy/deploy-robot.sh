@@ -15,8 +15,11 @@ ROBOT_HOST="${ROBOT#*@}"
 PI_IP="$(ssh -4 "$PI" "hostname -I | awk '{print \$1}'")"
 AGENT_KEY="$(ssh -4 "$PI" "grep '^API_SERVER_KEY=' ~/.config/household/agent.env | cut -d= -f2-")"
 
-ssh -4 "$ROBOT" "mkdir -p $APP/user_personalities/household"
-scp -4 -q "$HERE"/robot-profile/household/* "$ROBOT:$APP/user_personalities/household/"
+# Profile (persona + enabled tools) and the bridge tool. App 1.0.x only loads tools
+# from its own tools/ package, so ask_home_agent.py goes there.
+ssh -4 "$ROBOT" "mkdir -p $APP/user_personalities/household && cd $APP/user_personalities/household && rm -rf instructions.txt tools.txt ask_home_agent.py __pycache__"
+scp -4 -q "$HERE"/robot-profile/household/profile.md "$ROBOT:$APP/user_personalities/household/"
+scp -4 -q "$HERE"/robot-tools/ask_home_agent.py "$ROBOT:$APP/tools/"
 
 # The key goes over stdin, not the command line, so it doesn't show up in `ps`.
 printf '%s\n' "$AGENT_KEY" | ssh -4 "$ROBOT" "umask 077; cat > $APP/.home_agent_key"

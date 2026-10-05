@@ -20,7 +20,8 @@ while Hermes works and speaks the answer when it lands.
 
 | Path | What |
 |---|---|
-| `robot-profile/household/` | Conversation-app profile: `instructions.txt`, `tools.txt`, and the `ask_home_agent.py` bridge tool |
+| `robot-profile/household/profile.md` | Conversation-app profile: persona plus enabled tools |
+| `robot-tools/ask_home_agent.py` | Bridge tool, installed into the app's `tools/` package |
 | `hermes/` | `docker-compose.yml`, `config.yaml` (model, approvals) and `SOUL.md` (persona, spoken-reply rules, hard safety rules) |
 | `deploy/deploy-pi.sh` | Deploys or updates Hermes on the Pi |
 | `deploy/deploy-robot.sh` | Installs the profile on the robot, wires it to Hermes, restarts the app |
@@ -32,9 +33,10 @@ household/deploy/deploy-pi.sh      # Hermes on the Pi
 household/deploy/deploy-robot.sh   # profile + tool on the robot, then restart the app
 ```
 
-Both are idempotent. Re-run `deploy-robot.sh` after updating the conversation
-app from the Reachy Mini Control app, because the update wipes the app's
-instance directory where the profile lives.
+Both are idempotent. Re-run `deploy-robot.sh` after updating the conversation app from the Reachy
+Mini Control app. The update replaces the app package, which removes
+`tools/ask_home_agent.py`. Tested against app version 1.0.1; 0.10.x is too old
+for the current Hugging Face voice proxy.
 
 ## Where secrets live (never in git)
 

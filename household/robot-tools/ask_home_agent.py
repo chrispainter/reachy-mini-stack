@@ -1,6 +1,6 @@
 """Hand a request from the room to the household's Hermes agent on the Pi.
 
-Profile-local tool for the Reachy Mini conversation app. The app runs every tool
+Shared tool for the Reachy Mini conversation app (installed into its tools/ package). The app runs every tool
 in its background tool manager and speaks when the result arrives, so a slow
 agent turn doesn't freeze the conversation.
 

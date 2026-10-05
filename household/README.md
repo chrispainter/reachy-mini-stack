@@ -36,7 +36,9 @@ household/deploy/deploy-robot.sh   # profile + tool on the robot, then restart t
 Both are idempotent. Re-run `deploy-robot.sh` after updating the conversation app from the Reachy
 Mini Control app. The update replaces the app package, which removes
 `tools/ask_home_agent.py`. Tested against app version 1.0.1; 0.10.x is too old
-for the current Hugging Face voice proxy.
+for the current Hugging Face voice proxy. App 1.0.1 needs robot software
+1.10 or newer (the robot is on 1.11.0); on 1.9.0 the daemon puts back its own
+SDK whenever it restarts and the app crashes with `No module named 'reachy_mini.io.jsonrpc'`.
 
 ## Where secrets live (never in git)
 

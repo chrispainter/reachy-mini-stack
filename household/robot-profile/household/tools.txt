@@ -1,0 +1,15 @@
+ask_home_agent
+dance
+stop_dance
+play_emotion
+stop_emotion
+camera
+idle_do_nothing
+move_head
+go_to_sleep
+remember
+forget
+head_tracking
+pollen_robotics_reachy_mini_search_tool__search_web
+pollen_robotics_reachy_mini_weather_tool__get_weather
+pollen_robotics_reachy_mini_time_tool__get_time

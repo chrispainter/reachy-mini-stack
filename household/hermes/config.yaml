@@ -1,0 +1,13 @@
+# Hermes Agent config for the household brain (HERMES_HOME=/opt/data in the container).
+# Only overrides live here; Hermes fills in its own defaults for everything else.
+
+model:
+  provider: openai-api
+  default: gpt-5.4-mini   # fast + cheap for voice-driven tasks; try gpt-5.5 for harder work
+
+approvals:
+  mode: smart
+  # Requests from the robot arrive through the API server, which Hermes treats as
+  # unattended. "deny" makes risky shell commands fail instantly instead of running.
+  unattended_mode: deny
+  cron_mode: deny

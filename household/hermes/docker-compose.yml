@@ -1,0 +1,20 @@
+# Hermes Agent: the household brain, on the Pi (reachy-pi.local).
+# Data (config, keys, memory, sessions, skills) lives in ~/hermes-home on the Pi.
+# Secrets are in ~/.config/household/agent.env on the Pi (never committed) — see deploy/deploy-pi.sh.
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v2026.9.24
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run
+    env_file:
+      - ${HERMES_SECRETS:-~/.config/household/agent.env}
+    volumes:
+      - ${HERMES_HOME_DIR:-~/hermes-home}:/opt/data
+    ports:
+      # LAN only: the Pi has no public exposure. The robot calls this with a bearer key.
+      - "8642:8642"
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      TZ: "America/Los_Angeles"

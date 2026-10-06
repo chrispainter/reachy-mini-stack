@@ -1,4 +1,4 @@
-from spike.timing import BargeInDetector, DeadAirMeter, PlaybackClock, TurnTimer
+from spike.timing import BargeInDetector, DeadAirMeter, PlaybackClock, ReplyDropper, TurnTimer
 
 
 def test_playback_clock_tracks_queued_audio():
@@ -44,3 +44,33 @@ def test_barge_in_needs_consecutive_loud_frames_while_speaking():
     assert d.on_frame(0.2, robot_speaking=True)
     assert not d.on_frame(0.2, robot_speaking=False)  # resets when silent
     assert not d.on_frame(0.01, robot_speaking=True)
+
+
+def test_reply_dropper_idle_by_default():
+    assert ReplyDropper().should_drop(1.0) is False
+
+
+def test_reply_dropper_drops_consecutive_deltas_after_start():
+    d = ReplyDropper()
+    d.start(10.0)
+    assert d.should_drop(10.1) is True
+    assert d.should_drop(10.2) is True
+    assert d.should_drop(10.3) is True
+
+
+def test_reply_dropper_stops_after_gap():
+    d = ReplyDropper()
+    d.start(10.0)
+    assert d.should_drop(10.1) is True
+    assert d.should_drop(10.45) is False
+    assert d.should_drop(10.5) is False  # drop window is over
+
+
+def test_reply_dropper_counts_dropped_chunks():
+    d = ReplyDropper()
+    d.start(0.0)
+    d.should_drop(0.1)
+    d.should_drop(0.2)
+    assert d.dropped == 2
+    d.should_drop(0.6)
+    assert d.dropped == 2

@@ -41,10 +41,12 @@ def build_config(voice: str) -> types.LiveConnectConfig:
     )
 
 
-async def pump_mic(session, audio: RobotAudio, timer: TurnTimer) -> None:
+async def pump_mic(session, audio: RobotAudio, timer: TurnTimer, mic: dict) -> None:
     async for frame in audio.frames():
         now = time.monotonic()
-        timer.on_mic(rms(frame), now, audio.is_speaking(now))
+        level = rms(frame)
+        mic["level"] = round(level, 4)
+        timer.on_mic(level, now, audio.is_speaking(now))
         await session.send_realtime_input(
             audio=types.Blob(data=mic_to_pcm16(frame), mime_type="audio/pcm;rate=16000")
         )
@@ -75,17 +77,17 @@ def _tool_done(task: asyncio.Task, pending: set, log: JsonlLog) -> None:
         print(f"tool error: {exc!r}")
 
 
-async def pump_server(session, audio, timer, dead_air, log, delay_s) -> None:
+async def pump_server(session, audio, timer, dead_air, log, delay_s, mic) -> None:
     pending: set[asyncio.Task] = set()
     resampler = StreamResampler(24000, 16000)
     try:
-        await _serve(session, audio, timer, dead_air, log, delay_s, pending, resampler)
+        await _serve(session, audio, timer, dead_air, log, delay_s, pending, resampler, mic)
     finally:
         for t in list(pending):
             t.cancel()
 
 
-async def _serve(session, audio, timer, dead_air, log, delay_s, pending, resampler) -> None:
+async def _serve(session, audio, timer, dead_air, log, delay_s, pending, resampler, mic) -> None:
     while True:  # receive() ends after each completed turn
         async for msg in session.receive():
             now = time.monotonic()
@@ -93,7 +95,7 @@ async def _serve(session, audio, timer, dead_air, log, delay_s, pending, resampl
             if samples is not None and samples.size:  # soxr returns empty chunks while priming; pushing one segfaults GStreamer
                 latency = timer.on_robot_audio(now)
                 if latency is not None:
-                    log.write("first_audio", latency_s=latency)
+                    log.write("first_audio", latency_s=latency, level=mic["level"], robot_speaking=audio.is_speaking(now))
                     print(f"first audio {latency:.2f} s after speech")
                 dead_air.on_audio(now, len(samples) / 16000)
                 audio.play(samples, now)
@@ -116,6 +118,8 @@ async def _serve(session, audio, timer, dead_air, log, delay_s, pending, resampl
                     task = asyncio.create_task(answer_tool(session, fc, dead_air, log, delay_s))
                     pending.add(task)
                     task.add_done_callback(lambda t: _tool_done(t, pending, log))
+            if msg.tool_call_cancellation:
+                log.write("tool_call_cancellation", ids=list(msg.tool_call_cancellation.ids or []))
             if msg.usage_metadata:
                 log.write("usage", total_tokens=msg.usage_metadata.total_token_count)
 
@@ -124,6 +128,7 @@ async def main(args) -> None:
     log = JsonlLog(f"logs/gemini-{int(time.time())}.jsonl")
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     timer, dead_air = TurnTimer(speech_threshold=args.speech_threshold), DeadAirMeter()
+    mic = {"level": 0.0}
     with ReachyMini() as mini:
         audio = RobotAudio(mini.media)
         audio.start()
@@ -133,8 +138,8 @@ async def main(args) -> None:
                 print("listening; Ctrl-C to stop")
                 await asyncio.wait_for(
                     asyncio.gather(
-                        pump_mic(session, audio, timer),
-                        pump_server(session, audio, timer, dead_air, log, args.tool_delay),
+                        pump_mic(session, audio, timer, mic),
+                        pump_server(session, audio, timer, dead_air, log, args.tool_delay, mic),
                     ),
                     timeout=args.minutes * 60,
                 )

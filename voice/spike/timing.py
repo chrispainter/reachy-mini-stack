@@ -76,3 +76,27 @@ class BargeInDetector:
             self._count = 0
             return True
         return False
+
+
+@dataclass
+class ReplyDropper:
+    """After a local barge-in, discard the server's in-flight audio until it goes quiet for gap_s."""
+
+    gap_s: float = 0.3
+    active: bool = False
+    dropped: int = 0
+    _last: float = 0.0
+
+    def start(self, now: float) -> None:
+        self.active, self.dropped, self._last = True, 0, now
+
+    def should_drop(self, now: float) -> bool:
+        """Call for every arriving audio delta."""
+        if not self.active:
+            return False
+        if now - self._last >= self.gap_s:
+            self.active = False
+            return False
+        self._last = now
+        self.dropped += 1
+        return True

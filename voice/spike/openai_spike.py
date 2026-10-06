@@ -15,7 +15,7 @@ from spike.fake_agent import fake_home_agent
 from spike.log import JsonlLog
 from spike.persona import PERSONA
 from spike.robot_audio import RobotAudio
-from spike.timing import BargeInDetector, DeadAirMeter, TurnTimer
+from spike.timing import BargeInDetector, DeadAirMeter, ReplyDropper, TurnTimer
 
 URL = "wss://api.openai.com/v1/live/sessions"
 
@@ -33,15 +33,17 @@ def start_event(model: str, voice: str) -> dict:
     }
 
 
-async def pump_mic(ws, audio, timer, barge, log, started: asyncio.Event) -> None:
+async def pump_mic(ws, audio, timer, barge, log, started: asyncio.Event, mic: dict, dropper: ReplyDropper) -> None:
     await started.wait()
     async for frame in audio.frames():
         now = time.monotonic()
         level, speaking = rms(frame), audio.is_speaking(now)
+        mic["level"] = round(level, 4)
         timer.on_mic(level, now, speaking)
         if barge.on_frame(level, speaking):
             audio.clear(now)
-            log.write("barge_in")
+            dropper.start(now)
+            log.write("barge_in", level=mic["level"], robot_speaking=speaking)
         await ws.send(
             json.dumps({"type": "session.input_audio.append", "audio": base64.b64encode(mic_to_pcm16(frame)).decode()})
         )
@@ -72,16 +74,16 @@ def _tool_done(task: asyncio.Task, pending: set, log: JsonlLog) -> None:
         print(f"tool error: {exc!r}")
 
 
-async def pump_server(ws, audio, timer, dead_air, log, delay_s, started: asyncio.Event) -> None:
+async def pump_server(ws, audio, timer, dead_air, log, delay_s, started: asyncio.Event, mic: dict, dropper: ReplyDropper) -> None:
     pending: set[asyncio.Task] = set()
     try:
-        await _serve(ws, audio, timer, dead_air, log, delay_s, started, pending)
+        await _serve(ws, audio, timer, dead_air, log, delay_s, started, pending, mic, dropper)
     finally:
         for t in list(pending):
             t.cancel()
 
 
-async def _serve(ws, audio, timer, dead_air, log, delay_s, started, pending) -> None:
+async def _serve(ws, audio, timer, dead_air, log, delay_s, started, pending, mic, dropper) -> None:
     user_text = ""  # recent user transcript; the delegation event carries no task text
     async for raw in ws:
         event = json.loads(raw)
@@ -93,9 +95,14 @@ async def _serve(ws, audio, timer, dead_air, log, delay_s, started, pending) -> 
             samples = pcm16_to_float(base64.b64decode(event["delta"]), 16000, 16000)
             if not samples.size:  # never push an empty array: it segfaults GStreamer
                 continue
+            was_dropping = dropper.active
+            if dropper.should_drop(now):  # in-flight reply from before a local barge-in
+                continue
+            if was_dropping:
+                log.write("barge_drop", chunks=dropper.dropped)
             latency = timer.on_robot_audio(now)
             if latency is not None:
-                log.write("first_audio", latency_s=latency)
+                log.write("first_audio", latency_s=latency, level=mic["level"], robot_speaking=audio.is_speaking(now))
                 print(f"first audio {latency:.2f} s after speech")
             dead_air.on_audio(now, len(samples) / 16000)
             audio.play(samples, now)
@@ -119,13 +126,15 @@ async def _serve(ws, audio, timer, dead_air, log, delay_s, started, pending) -> 
         elif kind == "session.closed":
             log.write("session_closed", usage=event.get("usage"), reason=event.get("reason"))
             return
+        else:
+            log.write("server_event", type=kind)
 
 
 async def main(args) -> None:
     log = JsonlLog(f"logs/openai-{int(time.time())}.jsonl")
     timer = TurnTimer(speech_threshold=args.speech_threshold)
     dead_air, barge = DeadAirMeter(), BargeInDetector(threshold=args.barge_threshold)
-    started = asyncio.Event()
+    started, mic, dropper = asyncio.Event(), {"level": 0.0}, ReplyDropper()
     headers = {"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"}
     with ReachyMini() as mini:
         audio = RobotAudio(mini.media)
@@ -138,15 +147,18 @@ async def main(args) -> None:
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(
-                            pump_mic(ws, audio, timer, barge, log, started),
-                            pump_server(ws, audio, timer, dead_air, log, args.tool_delay, started),
+                            pump_mic(ws, audio, timer, barge, log, started, mic, dropper),
+                            pump_server(ws, audio, timer, dead_air, log, args.tool_delay, started, mic, dropper),
                         ),
                         timeout=args.minutes * 60,
                     )
                 except asyncio.TimeoutError:
                     pass
                 finally:
-                    await ws.send(json.dumps({"type": "session.close"}))
+                    try:
+                        await ws.send(json.dumps({"type": "session.close"}))
+                    except websockets.ConnectionClosed:
+                        pass
         finally:
             audio.stop()
             log.write("session_close")

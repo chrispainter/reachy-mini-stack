@@ -27,3 +27,25 @@ def pcm16_to_float(data: bytes, src_rate: int, dst_rate: int = 16000) -> np.ndar
 def rms(frame: np.ndarray) -> float:
     mono = _mono(frame)
     return float(np.sqrt(np.mean(np.square(mono)))) if mono.size else 0.0
+
+
+class StreamResampler:
+    """Click-free streaming resampler for 16-bit PCM chunks (keeps filter state across chunks)."""
+
+    def __init__(self, src_rate: int, dst_rate: int = 16000):
+        self._passthrough = src_rate == dst_rate
+        if not self._passthrough:
+            import soxr
+
+            self._stream = soxr.ResampleStream(src_rate, dst_rate, 1, dtype="float32")
+
+    def process(self, data: bytes) -> np.ndarray:
+        samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+        if self._passthrough:
+            return samples
+        return self._stream.resample_chunk(samples).astype(np.float32)
+
+    def flush(self) -> np.ndarray:
+        if self._passthrough:
+            return np.zeros(0, dtype=np.float32)
+        return self._stream.resample_chunk(np.zeros(0, dtype=np.float32), last=True).astype(np.float32)

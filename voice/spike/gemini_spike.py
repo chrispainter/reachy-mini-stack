@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 from reachy_mini import ReachyMini
 
-from spike.audio import mic_to_pcm16, pcm16_to_float, rms
+from spike.audio import StreamResampler, mic_to_pcm16, rms
 from spike.fake_agent import fake_home_agent
 from spike.log import JsonlLog
 from spike.persona import PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
@@ -65,13 +65,32 @@ async def answer_tool(session, fc, dead_air: DeadAirMeter, log: JsonlLog, delay_
     )
 
 
+def _tool_done(task: asyncio.Task, pending: set, log: JsonlLog) -> None:
+    pending.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.write("tool_error", error=repr(exc))
+        print(f"tool error: {exc!r}")
+
+
 async def pump_server(session, audio, timer, dead_air, log, delay_s) -> None:
     pending: set[asyncio.Task] = set()
+    resampler = StreamResampler(24000, 16000)
+    try:
+        await _serve(session, audio, timer, dead_air, log, delay_s, pending, resampler)
+    finally:
+        for t in list(pending):
+            t.cancel()
+
+
+async def _serve(session, audio, timer, dead_air, log, delay_s, pending, resampler) -> None:
     while True:  # receive() ends after each completed turn
         async for msg in session.receive():
             now = time.monotonic()
-            if msg.data:
-                samples = pcm16_to_float(msg.data, 24000, 16000)
+            samples = resampler.process(msg.data) if msg.data else None
+            if samples is not None and samples.size:  # soxr returns empty chunks while priming; pushing one segfaults GStreamer
                 latency = timer.on_robot_audio(now)
                 if latency is not None:
                     log.write("first_audio", latency_s=latency)
@@ -96,7 +115,7 @@ async def pump_server(session, audio, timer, dead_air, log, delay_s) -> None:
                     print(f"tool call {fc.name} {dict(fc.args or {})}")
                     task = asyncio.create_task(answer_tool(session, fc, dead_air, log, delay_s))
                     pending.add(task)
-                    task.add_done_callback(pending.discard)
+                    task.add_done_callback(lambda t: _tool_done(t, pending, log))
             if msg.usage_metadata:
                 log.write("usage", total_tokens=msg.usage_metadata.total_token_count)
 

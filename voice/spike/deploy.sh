@@ -6,6 +6,7 @@ set -euo pipefail
 ROBOT="${ROBOT:-pollen@reachy-mini.local}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"   # voice/
 
+ssh -4 "$ROBOT" 'mkdir -p ~/voice-spike/logs'
 rsync -a --delete --exclude '.venv' --exclude 'logs' --exclude '__pycache__' \
   -e "ssh -4" "$HERE/spike/" "$ROBOT:voice-spike/spike/"
 ssh -4 "$ROBOT" 'bash -s' <<'REMOTE'

@@ -17,6 +17,7 @@ from reachy_voice.policy import SessionPolicy
 
 RATE = 16000
 BODY_TEARDOWN_TIMEOUT_S = 15.0
+SPEAKING_HANGOVER_S = 0.3  # playback underruns between words must not flap the body's speaking state
 
 
 class EngineStartError(Exception):
@@ -63,7 +64,7 @@ class VoiceSession:
                         self._log.write("mic_error", error=repr(mic.exception()))
                     return "mic_closed"
                 now = self._clock()
-                speaking = self._out.is_speaking(now)
+                speaking = now < self._out.voiced_end + SPEAKING_HANGOVER_S
                 if speaking != self._was_speaking:
                     self._was_speaking = speaking
                     if speaking:
@@ -109,6 +110,10 @@ class VoiceSession:
         )
 
     def _spawn_body(self, coro, what: str) -> None:
+        if self._closing:
+            coro.close()
+            self._log.write("body_error", action=what, error="session closing")
+            return
         async def guarded():
             try:
                 await coro
@@ -129,6 +134,9 @@ class VoiceSession:
             self._log.write("body_error", action="teardown_timeout", error="body tasks still running")
 
     def _try_express(self, intent: str, source: str) -> None:
+        if self._closing:
+            self._log.write("expression_dropped", intent=intent, source=source, reason="closing")
+            return
         if intent not in EMOTIONS:
             self._log.write("expression_dropped", intent=intent, source=source, reason="unknown")
             return

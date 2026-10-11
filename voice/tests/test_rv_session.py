@@ -242,7 +242,7 @@ def test_speaking_transitions_drive_body_and_picker(tmp_path):
         engine.cb.on_robot_text("That's wonderful news!")
         engine.cb.on_audio(VOICED, 0.0)
     body, picker = FakeBody(), FakePicker("happy")
-    s, _ = make_body_session(FakeEngine(on_start=speak), FakeAudio(), FakeHermes(), tmp_path, body, picker)
+    s, _ = make_body_session(FakeEngine(on_start=speak), FakeAudio(), FakeHermes(), tmp_path, body, picker, idle=0.6)
     asyncio.run(s.run())
     kinds = [c[0] for c in body.calls]
     assert "speaking" in kinds and "listening" in kinds[kinds.index("speaking"):]
@@ -307,3 +307,43 @@ def test_failing_body_tool_callback_is_logged(tmp_path):
     s, path = make_body_session(FakeEngine(on_start=tools), FakeAudio(), FakeHermes(), tmp_path, FakeBody())
     asyncio.run(s.run())
     assert any(e["event"] == "callback_error" and e["where"] == "on_body_tool" for e in events(path))
+
+
+def test_no_body_motion_after_session_close(tmp_path):
+    class SlowPicker(FakePicker):
+        async def pick(self, text):
+            await asyncio.sleep(0.6)    # outlives the session
+            return await super().pick(text)
+
+    def speak(engine):
+        engine.cb.on_robot_text("Great news!")
+        engine.cb.on_audio(VOICED, 0.0)
+    body = FakeBody()
+    s, path = make_body_session(FakeEngine(on_start=speak), FakeAudio(), FakeHermes(), tmp_path, body,
+                                SlowPicker("happy"), idle=0.5)
+    asyncio.run(s.run())
+    assert not [c for c in body.calls if c[0] == "express"]
+    assert any(e["event"] == "expression_dropped" and e["reason"] == "closing" for e in events(path))
+
+
+def test_brief_playback_underrun_does_not_flap_body(tmp_path):
+    def speak(engine):
+        engine.cb.on_audio(VOICED, 0.0)
+        asyncio.get_running_loop().call_later(0.2, engine.cb.on_audio, VOICED, 0.0)   # 0.1 s of silence between
+    body = FakeBody()
+    s, _ = make_body_session(FakeEngine(on_start=speak), FakeAudio(), FakeHermes(), tmp_path, body, idle=0.6)
+    asyncio.run(s.run())
+    kinds = [c[0] for c in body.calls]
+    assert kinds.count("speaking") == 1 and kinds.count("listening") == 1
+
+
+def test_default_gate_drops_model_expression_while_user_talks(tmp_path):
+    def tools(engine):   # lands after the first voiced mic frames have registered
+        asyncio.get_running_loop().call_later(0.05, engine.cb.on_body_tool, "express", {"emotion": "happy"})
+    log = JsonlLog(str(tmp_path / "v.jsonl"))
+    body = FakeBody()
+    s = VoiceSession(FakeEngine(on_start=tools), FakeAudio(level=0.5, forever=True), FakeHermes(),
+                     SessionPolicy(5.0, 5.0, 0.3), 0.015, log, "sess-1", tick_s=0.01, body=body)
+    assert asyncio.run(asyncio.wait_for(s.run(), 5)) == "max_duration"
+    assert not [c for c in body.calls if c[0] == "express"]
+    assert any(e["event"] == "expression_dropped" and e["reason"] == "gate" for e in events(tmp_path / "v.jsonl"))

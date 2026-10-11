@@ -3,6 +3,7 @@
 Speaking state comes from voiced output samples, never from audio arriving:
 gpt-live-1 streams silence continuously (spike lesson, voice/spike/RESULTS.md)."""
 
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -53,11 +54,21 @@ class UserSpeech:
     last voiced mic frame -> scheduled start of the robot's first voiced output."""
 
     threshold: float = 0.015
+    window: int = 5
+    min_voiced: int = 3
     last_voice: float | None = None
     _awaiting_reply: bool = False
 
+    def __post_init__(self) -> None:
+        self._recent: deque[bool] = deque(maxlen=self.window)
+
     def on_mic(self, level: float, now: float, robot_speaking: bool) -> None:
-        if robot_speaking or level < self.threshold:
+        """The person counts as speaking only on sustained voice (min_voiced of the last
+        window frames): isolated spikes and distant chatter must not look like a turn."""
+        voiced = not robot_speaking and level >= self.threshold
+        self._recent.append(voiced)
+        # the current frame must itself be voiced, so trailing quiet frames don't extend the turn
+        if not voiced or sum(self._recent) < self.min_voiced:
             return
         self.last_voice = now
         self._awaiting_reply = True

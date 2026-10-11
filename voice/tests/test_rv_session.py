@@ -43,15 +43,16 @@ class FakeEngine:
 
 
 class FakeAudio:
-    def __init__(self, level=0.0, count=3, forever=False):
-        self.level, self.count, self.forever = level, count, forever
+    def __init__(self, level=0.0, count=3, forever=False, levels=None):
+        self.level, self.count, self.forever, self.levels = level, count, forever, levels
         self.played, self.cleared = [], 0
 
     async def frames(self):
         n = 0
         while self.forever or n < self.count:
+            level = self.levels[n % len(self.levels)] if self.levels else self.level
             n += 1
-            yield np.full((1024, 2), self.level, np.float32)
+            yield np.full((1024, 2), level, np.float32)
             await asyncio.sleep(0.005)
         await asyncio.Event().wait()   # mic stays open, silent
 
@@ -149,6 +150,33 @@ def test_engine_start_failure_raises_engine_start_error(tmp_path):
 def test_constant_background_speech_is_capped_by_max_duration(tmp_path):
     s, _ = make(FakeEngine(), FakeAudio(level=0.5, forever=True), FakeHermes(), tmp_path, idle=0.1, max_s=0.3)
     assert asyncio.run(s.run()) == "max_duration"
+
+
+def test_isolated_mic_spikes_do_not_keep_the_session_open(tmp_path):
+    audio = FakeAudio(levels=[0.05] + [0.003] * 9, forever=True)
+    s, _ = make(FakeEngine(), audio, FakeHermes(), tmp_path, idle=0.2, max_s=5.0)
+    assert asyncio.run(asyncio.wait_for(s.run(), 4)) == "idle"
+
+
+def test_mic_level_stats_are_logged_every_five_seconds(tmp_path):
+    clock = [0.0]
+    log = JsonlLog(str(tmp_path / "v.jsonl"))
+    audio = FakeAudio(levels=[0.05, 0.05, 0.05, 0.003], count=12)
+    s = VoiceSession(FakeEngine(), audio, FakeHermes(), SessionPolicy(100.0, 5.0, 100.0), 0.015, log, "sess-1",
+                     clock=lambda: clock[0], tick_s=0.01)
+
+    async def go():
+        task = asyncio.create_task(s._pump_mic())
+        while audio.count and not task.done():
+            await asyncio.sleep(0.002)
+            clock[0] += 1.0
+            if clock[0] > 40:
+                break
+        task.cancel()
+    asyncio.run(go())
+    stats = [e for e in events(tmp_path / "v.jsonl") if e["event"] == "mic_level"]
+    assert stats and {"p50", "p90", "voiced_frac", "sustained"} <= set(stats[0])
+    assert stats[0]["voiced_frac"] == 0.75 and stats[0]["sustained"] is True
 
 
 def test_engine_dropping_ends_session(tmp_path):

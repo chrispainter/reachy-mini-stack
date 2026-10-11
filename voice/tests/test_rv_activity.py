@@ -36,10 +36,14 @@ def test_clear_stops_speaking():
     assert not out.is_speaking(0.06) and out.queued_s(0.06) == 0.0
 
 
-def test_latency_from_last_user_voice_to_first_voiced_output():
+def feed(user, levels, start=0.0, step=0.1, robot_speaking=False):
+    for i, level in enumerate(levels):
+        user.on_mic(level, now=round(start + i * step, 3), robot_speaking=robot_speaking)
+
+
+def test_latency_from_last_sustained_voice_to_first_voiced_output():
     user = UserSpeech(threshold=0.015)
-    user.on_mic(0.05, now=1.0, robot_speaking=False)
-    user.on_mic(0.05, now=1.4, robot_speaking=False)
+    feed(user, [0.05] * 5, start=1.0, step=0.1)              # sustained speech, frames at 1.0 .. 1.4
     user.on_mic(0.001, now=1.6, robot_speaking=False)
     assert user.on_voiced_output(2.5) == 1.1
     assert user.on_voiced_output(2.6) is None          # once per turn
@@ -48,5 +52,28 @@ def test_latency_from_last_user_voice_to_first_voiced_output():
 
 def test_mic_ignored_while_robot_speaks():
     user = UserSpeech()
-    user.on_mic(0.5, now=1.0, robot_speaking=True)
+    feed(user, [0.5] * 10, robot_speaking=True)
     assert user.last_voice is None and user.on_voiced_output(1.2) is None
+
+
+def test_isolated_spikes_never_count_as_speech():
+    user = UserSpeech()
+    feed(user, ([0.05] + [0.003] * 9) * 20)
+    assert user.last_voice is None and user.on_voiced_output(99.0) is None
+
+
+def test_sustained_voice_counts_by_the_third_loud_frame():
+    user = UserSpeech()
+    feed(user, [0.003, 0.05, 0.05], start=1.0, step=0.1)
+    assert user.last_voice is None                      # two loud frames: not yet
+    user.on_mic(0.05, now=1.3, robot_speaking=False)
+    assert user.last_voice == 1.3
+    feed(user, [0.05, 0.05], start=1.4, step=0.1)
+    assert user.last_voice == 1.5
+
+
+def test_robot_speaking_frames_do_not_count_toward_the_window():
+    user = UserSpeech()
+    feed(user, [0.05, 0.05], start=1.0, robot_speaking=True)
+    feed(user, [0.05, 0.05], start=1.2)                 # only two real loud frames in the window
+    assert user.last_voice is None

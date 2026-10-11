@@ -17,6 +17,7 @@ from reachy_voice.policy import SessionPolicy
 
 RATE = 16000
 BODY_TEARDOWN_TIMEOUT_S = 15.0
+MIC_STATS_WINDOW_S = 5.0
 SPEAKING_HANGOVER_S = 0.3  # playback underruns between words must not flap the body's speaking state
 
 
@@ -44,6 +45,8 @@ class VoiceSession:
         self._was_speaking = False
         self._utterance_started: float | None = None
         self._utterance_text: list[str] = []
+        self._mic_levels: list[float] = []
+        self._mic_window_start: float | None = None
 
     async def run(self) -> str:
         opened = self._clock()
@@ -172,8 +175,25 @@ class VoiceSession:
     async def _pump_mic(self) -> None:
         async for frame in self._audio.frames():
             now = self._clock()
-            self._user.on_mic(rms(frame), now, self._out.is_speaking(now))
+            level = rms(frame)
+            self._user.on_mic(level, now, self._out.is_speaking(now))
+            self._record_mic_level(level, now)
             await self._engine.send_audio(frame)
+
+    def _record_mic_level(self, level: float, now: float) -> None:
+        """Diagnostic: one mic_level event per MIC_STATS_WINDOW_S of session clock."""
+        if self._mic_window_start is None:
+            self._mic_window_start = now
+        self._mic_levels.append(level)
+        if now - self._mic_window_start < MIC_STATS_WINDOW_S:
+            return
+        levels = np.asarray(self._mic_levels)
+        last = self._user.last_voice
+        self._log.write("mic_level", p50=round(float(np.percentile(levels, 50)), 4),
+                        p90=round(float(np.percentile(levels, 90)), 4),
+                        voiced_frac=round(float(np.mean(levels >= self._user.threshold)), 3),
+                        sustained=last is not None and last >= self._mic_window_start)
+        self._mic_levels, self._mic_window_start = [], now
 
     def _on_audio(self, samples: np.ndarray, now: float) -> None:
         if self._closing:

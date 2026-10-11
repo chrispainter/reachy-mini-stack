@@ -24,6 +24,7 @@ interruptions: 4
 
 Deviations and issues:
 - Early on it misheard a garbled fragment ("escarne") as Spanish and replied in Spanish ("Perdona, no te entendí bien..."), then recovered. Plan 2 should pin English in the persona and in the Gemini speech config (`language_code` en-US).
+- SDK check printed `types ok`; `scheduling=WHEN_IDLE` on FunctionResponse accepted, no fallback.
 - Voice comparison (Puck, Aoede) was not done; Kore was used throughout.
 
 ## OpenAI gpt-live-1
@@ -36,8 +37,8 @@ Summary of the rerun:
 
 ```
 engine: openai (gpt-live-1, voice marin)
-first audio after user speech: n=4, median 0.01 s, max 0.03 s
-tool item_EXudlD3CvQvaWzAqVufVl: 19.4 s of speech during a 20.002 s tool
+first audio after user speech: n=4, median 0.01 s, max 0.03 s   <- INVALID (see below)
+tool item_EXudlD3CvQvaWzAqVufVl: 19.4 s of speech during a 20.002 s tool   <- INVALID (see below)
 interruptions: 0 (local barge-in disabled)
 ```
 
@@ -76,7 +77,7 @@ After:
 | What's on the grocery list? | 7.4 | 3 | 7.1 | The grocery list has milk, eggs, and bread. |
 | Remove bread from the grocery list. | 10.0 | 4 | 9.5 | Done — I removed bread from the grocery list. |
 
-Near-miss: the second lookup took 3 model calls / 7.4 s against the 2-call / ~6 s target, and the remove edit took 4 calls.
+Near-miss: plan target (Task 5 Step 7): lookups 2 calls / ≤~6 s; edits 2–3 calls. The second lookup took 3 model calls / 7.4 s, and the remove edit took 4 calls.
 
 ## Decision
 
@@ -86,7 +87,7 @@ Near-miss: the second lookup took 3 model calls / 7.4 s against the 2-call / ~6 
 | First-audio latency, max | 1.81 s | not measurable (see above) |
 | Speech during tool | yes (8.3 s of 20 s) | yes (transcript-confirmed; the 19.4 s figure is invalid) |
 | Result at a natural pause | yes, 4.8 s after the result arrived | yes, 2.4 s after the result arrived |
-| Barge-in | works; story stopped quickly | works; model stopped itself mid-sentence |
+| Barge-in | works (listener-judged: stopped quickly) | works (listener-judged: model stopped itself; local barge-in off) |
 | Voice | Kore | marin |
 | Naturalness (listener, 1-5) | 4 | 5 |
 | Cost per minute | about $0.023 | $0.05 |

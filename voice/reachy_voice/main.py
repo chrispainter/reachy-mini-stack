@@ -78,8 +78,7 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
             if not timer.awake:
                 await body.wake(doa)
                 timer.on_wake(time.monotonic())
-                if gate.allow(time.monotonic(), None, None):
-                    asyncio.get_running_loop().create_task(body.express(CUES["wake"]))
+                # No welcome expression here: the person is usually still talking and head motion raises mic noise ~22x.
             else:
                 timer.on_wake(time.monotonic())
             name = chooser.next()
@@ -88,7 +87,10 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
             log.write("session_end", engine=engine_used, reason=reason)
             audio.chime("sleep")
             if reason != "error" and gate.allow(time.monotonic(), None, None):
-                await body.express(CUES["session_end"])
+                try:
+                    await asyncio.wait_for(body.express(CUES["session_end"]), timeout=10)
+                except asyncio.TimeoutError:
+                    log.write("body_error", action="goodbye_timeout")
             await body.rest()
             timer.on_session_end(time.monotonic())
             wake.reset(time.monotonic())

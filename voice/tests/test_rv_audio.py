@@ -67,31 +67,58 @@ def test_jsonl_log_write_never_raises(tmp_path, monkeypatch):
     log.write("cyclic", bad=cyc)  # ValueError from json: swallowed
 
 
-def test_robot_audio_doa_uses_median_of_recent_speech_readings():
+def test_sample_doa_never_blocks_and_one_read_in_flight():
+    import asyncio
+    import time
+
+    from reachy_voice.robot_audio import RobotAudio
+
+    class Media:
+        calls = 0
+
+        def get_DoA(self):
+            Media.calls += 1
+            time.sleep(0.2)
+            return (1.2, True)
+
+    async def go():
+        clock = {"t": 100.0}
+        audio = RobotAudio(Media(), clock=lambda: clock["t"])
+        start = time.perf_counter()
+        for i in range(5):
+            audio.sample_doa(100.0 + i * 0.1)
+        assert time.perf_counter() - start < 0.02
+        assert audio.doa(100.5) is None  # nothing finished yet
+        await asyncio.sleep(0.4)
+        assert Media.calls == 1  # the later samples saw a read in flight
+        assert audio.doa(100.5) == 1.2
+        audio.sample_doa(101.0)
+        await asyncio.sleep(0.4)
+        assert Media.calls == 2
+
+    asyncio.run(go())
+
+
+def test_sample_doa_ignores_non_speech_and_errors():
+    import asyncio
+
     from reachy_voice.robot_audio import RobotAudio
 
     class Media:
         def __init__(self):
-            self.readings = iter([(1.0, True), (9.0, False), (1.2, True), None, (3.0, True)])
+            self.readings = iter([(1.0, False), None, RuntimeError("down")])
 
         def get_DoA(self):
-            return next(self.readings)
+            r = next(self.readings)
+            if isinstance(r, Exception):
+                raise r
+            return r
 
-    audio = RobotAudio(Media())
-    assert audio.doa(0.0) is None
-    for t in (0.0, 0.1, 0.2, 0.3, 0.4):
-        audio.sample_doa(t)
-    assert audio.doa(0.5) == 1.2
-    assert audio.doa(5.0) is None
+    async def go():
+        audio = RobotAudio(Media(), clock=lambda: 0.0)
+        for i in range(3):
+            audio.sample_doa(i * 1.0)
+            await asyncio.sleep(0.05)
+        assert audio.doa(0.1) is None
 
-
-def test_robot_audio_sample_doa_survives_daemon_errors():
-    from reachy_voice.robot_audio import RobotAudio
-
-    class Media:
-        def get_DoA(self):
-            raise RuntimeError("daemon down")
-
-    audio = RobotAudio(Media())
-    audio.sample_doa(0.0)
-    assert audio.doa(0.1) is None
+    asyncio.run(go())

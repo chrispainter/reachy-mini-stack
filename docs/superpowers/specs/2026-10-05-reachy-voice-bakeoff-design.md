@@ -217,8 +217,13 @@ neighbours.
 
 ## Open questions resolved by the spike
 
-- Gemini 3.8 Live: is `NON_BLOCKING` actually the default, and does
-  `WHEN_IDLE` scheduling behave as described?
-- `gpt-live-1`: how predictable is delegation timing? Developers report it
-  isn't. Is there a usable way to end the session?
-- Which voices sound best on Reachy's small speaker.
+- Gemini 3.8 Live, `NON_BLOCKING` and `WHEN_IDLE`: worked as described. The
+  SDK `scheduling` field was accepted, and the result was spoken at a pause
+  (4.8 s after it arrived). See [RESULTS](../../../voice/spike/RESULTS.md).
+- `gpt-live-1` delegation timing: it fired at a sensible moment in this run,
+  but transcripts carry no turn boundaries, so the request text needs
+  segmentation. The session ends via `session.close`. See
+  [RESULTS](../../../voice/spike/RESULTS.md).
+- Voices on Reachy's small speaker: only Kore (Gemini) and marin (OpenAI) were
+  tried, so the comparison is still open. See
+  [RESULTS](../../../voice/spike/RESULTS.md).

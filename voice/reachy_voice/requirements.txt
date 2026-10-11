@@ -1,0 +1,4 @@
+google-genai==2.28.0
+soxr==1.1.0
+tqdm
+requests

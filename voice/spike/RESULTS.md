@@ -18,12 +18,13 @@ interruptions: 4
 ```
 
 1. Talk during the tool: yes. It said "Sure, let me check the list for you", then answered the favourite-colour question during the 20 s tool.
-2. Natural pause: yes. "By the way, the grocery list currently has milk, eggs, and coffee on it." Spoken 4.8 s after the result arrived (24.8 s from the request).
+2. Natural pause: yes. "By the way, the grocery list currently has milk, eggs, and coffee on it." Spoken 4.8 s after the result arrived (24.8 s from the request). This is from transcript-event timestamps, not audible playback.
 3. Barge-in: the story was cut off when interrupted; the listener said "it stopped pretty quickly".
 4. Naturalness: 4/5 (listener).
 
 Deviations and issues:
 - Early on it misheard a garbled fragment ("escarne") as Spanish and replied in Spanish ("Perdona, no te entendí bien..."), then recovered. Plan 2 should pin English in the persona and in the Gemini speech config (`language_code` en-US).
+- Interruptions (4 logged): lining the `interrupted` events up with the transcript, the one at the story (about 6 s into it) was the deliberate barge-in. The first two came about 1 s after Reachy's "how are you doing today?" and "anything I can help you with?" lines, just before the user's "I'm doing great" and "That's wonderful", so they were the user talking over Reachy. The third came right after Reachy's last question and was followed only by the garbled "escarne" fragment, so it looks spurious (possible echo or room noise) or a mumbled start by the user.
 - SDK check printed `types ok`; `scheduling=WHEN_IDLE` on FunctionResponse accepted, no fallback.
 - Voice comparison (Puck, Aoede) was not done; Kore was used throughout.
 
@@ -47,11 +48,11 @@ INVALID numbers:
 - Speech during the tool (19.4 s of 20.002 s) is invalid as a number, because it is inflated by streamed silence. The transcript confirms it did talk during the tool.
 
 1. Talk during the tool: yes. "Checking now. I'll be right back." Then it answered the colour question.
-2. Natural pause: yes. "Okay, I've got it. The list has milk, eggs, and coffee." Spoken 2.4 s after the result arrived (22.4 s from the request).
+2. Natural pause: yes. "Okay, I've got it. The list has milk, eggs, and coffee." Spoken 2.4 s after the result arrived (22.4 s from the request). This is from transcript-event timestamps, not audible playback.
 3. Barge-in: the story was cut off mid-sentence ("...if the sunlight felt") and it moved to the joke. The model stopped itself.
 4. Naturalness: 5/5 (listener).
 
-Delegation timing: it fired at a sensible moment, right after "What's on the grocery list". However, the delegation request text was the whole rolling transcript since session start ("Hi Reachy, how are you today What's a good name for a goldfish ... What's on the grocery list"), because gpt-live-1 transcripts carry no turn boundaries. Plan 2 needs turn segmentation.
+Delegation timing: it fired at a sensible moment, right after "What's on the grocery list". However, the delegation request text was the whole rolling transcript since session start ("Hi Reachy, how are you today What's a good name for a goldfish ... What's on the grocery list"). That was partly a spike artifact: the spike's `user_text` buffer resets only after a delegation and is capped at 500 characters. The real finding is that gpt-live-1 transcripts carry no turn-boundary events, so Plan 2 needs its own turn segmentation.
 
 Deviations: local barge-in disabled (`--barge-threshold 99`). Voice comparison (cedar, vesper) was not done; marin was used throughout.
 
@@ -92,13 +93,17 @@ Near-miss: plan target (Task 5 Step 7): lookups 2 calls / ≤~6 s; edits 2–3 c
 | Naturalness (listener, 1-5) | 4 | 5 |
 | Cost per minute | about $0.023 | $0.05 |
 
-Listener note: response speed felt similar between the two. The shopping-list answer felt slower with OpenAI, but the timing data shows both waited the fake 20 s and OpenAI spoke the list sooner after it arrived (2.4 s vs 4.8 s). Real Hermes lookups now take about 7 s.
+Listener note: response speed felt similar between the two. The shopping-list answer felt slower with OpenAI, but the timing data shows both waited the fake 20 s and OpenAI spoke the list sooner after it arrived (2.4 s vs 4.8 s). Treat that comparison with care: both figures come from transcript-event timestamps rather than playback, and Gemini's `WHEN_IDLE` delay depends on whether it was mid-sentence when the result arrived, so the two are not directly comparable. Real Hermes lookups now take about 7 s.
 
 Rule outcome: both engines talk during the tool, deliver the result at a pause and handle barge-in. Rule "Both pass" applies, so Plan 2 builds the full bake-off as specified.
 
 ### Lessons for Plan 2
 
-1. OpenAI: no local barge-in or reply-drop; rely on the model. Measure latency differently (for example server-side timing, or VAD on the mic against the first non-silent output sample).
+1. OpenAI: no local barge-in or reply-drop; rely on the model. Do not reuse `BargeInDetector` or `ReplyDropper` for OpenAI.
+   - gpt-live-1 streams audio (including silence) continuously, so "audio arriving" never means "the robot is speaking". Anything keyed to speaking state must derive it from output energy or transcript events for OpenAI: `PlaybackClock`, echo gating, speech-driven motion, the ~30 s quiet timeout, waiting for a pause before the farewell, and `PendingAnswers` delivery.
+   - Unverified: whether the stream arrives faster than real time, which would risk an unbounded speaker queue.
+   - SDK events Plan 2 will want: `session.input_audio.mute` / `unmute`, `session.usage.updated` (cost), `session.instructions.append`.
+   - Define one cross-engine latency metric before the bake-off: mic VAD end-of-speech to first non-silent output sample at playback. OpenAI latency is currently unmeasured, and the Gemini figures are a lower bound (chunk arrival, not audible playback).
 2. OpenAI delegation needs turn-segmented request text (for example only text after the robot's last utterance, or transcript start_ms/end_ms gaps).
 3. Gemini: pin English in the persona and speech config (`language_code` en-US).
 4. Speech threshold 0.015 in a quiet room. TV noise is a real-world issue, so a wake word matters.

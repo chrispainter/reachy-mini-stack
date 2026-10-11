@@ -2,6 +2,8 @@
     python3 hermes_bench.py --label before
 Reads the API key from ~/.config/household/agent.env and per-call timings from
 Hermes' agent.log (via docker exec). Prints a Markdown table.
+WARNING: this edits the real grocery list (adds then removes "bread"), so a
+failed run can leave "bread" on it.
 """
 
 import argparse

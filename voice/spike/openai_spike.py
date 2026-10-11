@@ -171,7 +171,9 @@ if __name__ == "__main__":
     p.add_argument("--tool-delay", type=float, default=20.0)
     p.add_argument("--minutes", type=float, default=6.0)
     p.add_argument("--speech-threshold", type=float, default=0.02)
-    p.add_argument("--barge-threshold", type=float, default=0.08)
+    # Default 99.0 = local barge-in effectively off. gpt-live-1 streams audio continuously, so the
+    # ReplyDropper never saw a gap and silenced every reply; see voice/spike/RESULTS.md.
+    p.add_argument("--barge-threshold", type=float, default=99.0)
     try:
         asyncio.run(main(p.parse_args()))
     except KeyboardInterrupt:

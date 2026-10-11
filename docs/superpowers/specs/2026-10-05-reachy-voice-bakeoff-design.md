@@ -217,12 +217,16 @@ neighbours.
 
 ## Open questions resolved by the spike
 
-- Gemini 3.8 Live, `NON_BLOCKING` and `WHEN_IDLE`: worked as described. The
+- Gemini 3.8 Live: explicit `behavior=NON_BLOCKING` + `WHEN_IDLE` works. The
   SDK `scheduling` field was accepted, and the result was spoken at a pause
-  (4.8 s after it arrived). See [RESULTS](../../../voice/spike/RESULTS.md).
+  (4.8 s after it arrived). Whether NON_BLOCKING is the default was not
+  tested; Plan 2 sets it explicitly. See
+  [RESULTS](../../../voice/spike/RESULTS.md).
 - `gpt-live-1` delegation timing: it fired at a sensible moment in this run,
   but transcripts carry no turn boundaries, so the request text needs
-  segmentation. The session ends via `session.close`. See
+  segmentation. `session.close` exists in the SDK event list; a server
+  `session.closed` acknowledgement was not observed (the spike sent it and
+  exited without reading a reply) — verify in Plan 2. See
   [RESULTS](../../../voice/spike/RESULTS.md).
 - Voices on Reachy's small speaker: only Kore (Gemini) and marin (OpenAI) were
   tried, so the comparison is still open. See

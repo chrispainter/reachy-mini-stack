@@ -1,0 +1,17 @@
+[Unit]
+Description=Reachy voice assistant (wake word + live voice + Hermes)
+After=reachy-mini-daemon.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=pollen
+WorkingDirectory=/home/pollen/reachy-voice
+EnvironmentFile=/home/pollen/reachy-voice/voice.env
+# Free the mic: the daemon runs one media owner at a time. A 400 (no app running) is fine.
+ExecStartPre=-/usr/bin/curl -s -m 30 -X POST http://127.0.0.1:8000/api/apps/stop-current-app
+ExecStart=/home/pollen/reachy-voice/.venv/bin/python -m reachy_voice.main
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -23,3 +23,30 @@ echo "import site; site.addsitedir('/venvs/apps_venv/lib/python3.12/site-package
 .venv/bin/python -c "import google.genai, soxr, openwakeword, reachy_mini; print('voice venv ok')"
 df -h / | tail -1
 REMOTE
+scp -4 -q "$HERE/deploy/reachy-voice.service" "$ROBOT:reachy-voice/reachy-voice.service"
+ssh -4 "$ROBOT" "ENABLE=${1:-} bash -s" <<'REMOTE'
+set -euo pipefail
+cd ~/reachy-voice
+APP_ENV=/venvs/apps_venv/lib/python3.12/site-packages/reachy_mini_conversation_app/.env
+umask 077
+# Keys never leave the robot: copy the four needed lines, keep any local VOICE_* overrides.
+{ grep -E '^(GEMINI_API_KEY|OPENAI_API_KEY|HOME_AGENT_URL|HOME_AGENT_KEY)=' "$APP_ENV"
+  [ -f voice.env ] && grep -vE '^(GEMINI_API_KEY|OPENAI_API_KEY|HOME_AGENT_URL|HOME_AGENT_KEY)=' voice.env || true
+} > voice.env.new
+grep -q '^VOICE_ENGINE=' voice.env.new || echo 'VOICE_ENGINE=alternate' >> voice.env.new
+grep -q '^VOICE_LOG_DIR=' voice.env.new || echo 'VOICE_LOG_DIR=/home/pollen/reachy-voice/logs' >> voice.env.new
+mv voice.env.new voice.env && chmod 600 voice.env
+sudo install -m 644 reachy-voice.service /etc/systemd/system/reachy-voice.service
+sudo systemctl daemon-reload
+if [ "$ENABLE" = "--enable" ]; then sudo systemctl enable reachy-voice; fi
+sudo systemctl restart reachy-voice
+sleep 8
+systemctl is-active reachy-voice
+# Model load can take longer than the sleep; wait up to 30 s for the "ready" line.
+for _ in $(seq 15); do
+  f=$(ls -t logs/voice-*.jsonl 2>/dev/null | head -1 || true)
+  [ -n "$f" ] && grep -q '"ready"' "$f" && break
+  sleep 2
+done
+tail -n 3 "$(ls -t logs/voice-*.jsonl | head -1)"
+REMOTE

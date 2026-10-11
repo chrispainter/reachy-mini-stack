@@ -43,3 +43,25 @@ def test_jsonl_log_creates_dir_and_appends(tmp_path):
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert [r["event"] for r in rows] == ["wake", "session_end"] and rows[0]["engine"] == "gemini"
     assert isinstance(rows[0]["ts"], float)
+
+
+def test_jsonl_log_serialises_unknown_objects_via_str(tmp_path):
+    path = tmp_path / "x.jsonl"
+    JsonlLog(str(path)).write("odd", thing=object, path=tmp_path)
+    row = json.loads(path.read_text())
+    assert row["event"] == "odd" and isinstance(row["thing"], str)
+
+
+def test_jsonl_log_write_never_raises(tmp_path, monkeypatch):
+    log = JsonlLog(str(tmp_path / "x.jsonl"))
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("builtins.open", boom)
+    log.write("wake")  # must not raise
+    monkeypatch.undo()
+    log.write("circular", bad=float("nan"))
+    cyc = []
+    cyc.append(cyc)
+    log.write("cyclic", bad=cyc)  # ValueError from json: swallowed

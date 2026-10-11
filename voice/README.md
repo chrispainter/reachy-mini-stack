@@ -9,7 +9,7 @@ household's Hermes agent on the Pi without going silent.
 - Wake word: openWakeWord (`WAKE_MODEL`, `WAKE_THRESHOLD`); nothing leaves the robot until it fires.
 - Hand-offs: Hermes at `HOME_AGENT_URL`. List and note requests use the quick lane (`QUICK_MODEL`).
 - Sessions close after `IDLE_TIMEOUT_S` (30) of quiet. While a hand-off is pending they stay open
-  up to `PENDING_MAX_S` (300). They never run past `MAX_SESSION_S` (600).
+  up to `PENDING_MAX_S` (330). They never run past `MAX_SESSION_S` (600).
 - Logs: `~/reachy-voice/logs/voice-*.jsonl` (first_audio latency, delegations, session ends).
 
 ## Deploy and operate (from the Mac)

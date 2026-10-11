@@ -36,3 +36,9 @@ def test_missing_key_for_chosen_engine_is_rejected():
 def test_has_engine_reflects_keys():
     s = load_settings({"GEMINI_API_KEY": "g", "VOICE_ENGINE": "gemini"})
     assert s.has_engine("gemini") and not s.has_engine("openai")
+
+
+def test_repr_does_not_leak_keys():
+    s = load_settings({"GEMINI_API_KEY": "gem-secret", "OPENAI_API_KEY": "oai-secret", "HOME_AGENT_KEY": "home-secret"})
+    text = repr(s)
+    assert "gem-secret" not in text and "oai-secret" not in text and "home-secret" not in text

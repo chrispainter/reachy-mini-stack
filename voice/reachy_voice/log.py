@@ -11,5 +11,10 @@ class JsonlLog:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     def write(self, event: str, **fields) -> None:
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"event": event, "ts": time.time(), **fields}) + "\n")
+        """Best-effort: logging must never take the assistant down."""
+        try:
+            line = json.dumps({"event": event, "ts": time.time(), **fields}, default=str) + "\n"
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except (OSError, TypeError, ValueError):
+            pass

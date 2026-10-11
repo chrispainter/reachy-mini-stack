@@ -39,6 +39,8 @@ mv voice.env.new voice.env && chmod 600 voice.env
 sudo install -m 644 reachy-voice.service /etc/systemd/system/reachy-voice.service
 sudo systemctl daemon-reload
 if [ "$ENABLE" = "--enable" ]; then sudo systemctl enable reachy-voice; fi
+chmod 700 logs
+chmod 600 logs/*.jsonl 2>/dev/null || true
 before=$(ls logs/voice-*.jsonl 2>/dev/null | sort || true)
 sudo systemctl restart reachy-voice
 sleep 8

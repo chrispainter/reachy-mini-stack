@@ -7,13 +7,14 @@ StartLimitBurst=5
 
 [Service]
 User=pollen
+UMask=0077
 WorkingDirectory=/home/pollen/reachy-voice
 EnvironmentFile=/home/pollen/reachy-voice/voice.env
 # Free the mic: the daemon runs one media owner at a time. A 400 (no app running) is fine.
 ExecStartPre=-/usr/bin/curl -s -m 30 -X POST http://127.0.0.1:8000/api/apps/stop-current-app
 ExecStart=/home/pollen/reachy-voice/.venv/bin/python -m reachy_voice.main
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

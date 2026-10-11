@@ -2,13 +2,14 @@ import asyncio
 import json
 
 import numpy as np
+import pytest
 
 from reachy_voice.engines.base import Delegation
 from reachy_voice.hermes import HermesError
 from reachy_voice.log import JsonlLog
 from reachy_voice.persona import FALLBACK_REPLY
 from reachy_voice.policy import SessionPolicy
-from reachy_voice.session import VoiceSession
+from reachy_voice.session import EngineStartError, VoiceSession
 
 VOICED = np.full(1600, 0.2, np.float32)
 
@@ -61,12 +62,14 @@ class FakeAudio:
 
 
 class FakeHermes:
-    def __init__(self, answer="Milk and eggs.", delay=0.0, fail=False):
-        self.answer, self.delay, self.fail, self.calls = answer, delay, fail, []
+    def __init__(self, answer="Milk and eggs.", delay=0.0, fail=False, crash=None):
+        self.answer, self.delay, self.fail, self.crash, self.calls = answer, delay, fail, crash, []
 
     async def ask(self, request, asked_by, lane, session_id):
         self.calls.append((request, lane, session_id))
         await asyncio.sleep(self.delay)
+        if self.crash:
+            raise self.crash
         if self.fail:
             raise HermesError("ConnectError: refused")
         return self.answer
@@ -111,6 +114,35 @@ def test_hermes_failure_delivers_spoken_fallback(tmp_path):
     asyncio.run(s.run())
     assert engine.delivered == [("c1", FALLBACK_REPLY)]
     assert any(e["event"] == "delegation_error" for e in events(path))
+
+
+def test_unexpected_hermes_exception_still_delivers_fallback(tmp_path):
+    engine = FakeEngine(on_start=delegate)
+    s, path = make(engine, FakeAudio(), FakeHermes(crash=RuntimeError("boom")), tmp_path)
+    assert asyncio.run(s.run()) == "idle"
+    assert engine.delivered == [("c1", FALLBACK_REPLY)]
+    err = [e for e in events(path) if e["event"] == "delegation_error"][0]
+    assert "RuntimeError" in err["error"]
+
+
+def test_empty_request_skips_hermes_and_delivers_fallback(tmp_path):
+    engine = FakeEngine(on_start=lambda e: e.cb.on_delegation(Delegation("c1", "   ", "quick")))
+    hermes = FakeHermes()
+    s, path = make(engine, FakeAudio(), hermes, tmp_path)
+    asyncio.run(s.run())
+    assert hermes.calls == [] and engine.delivered == [("c1", FALLBACK_REPLY)]
+    err = [e for e in events(path) if e["event"] == "delegation_error"][0]
+    assert err["error"] == "empty request"
+
+
+def test_engine_start_failure_raises_engine_start_error(tmp_path):
+    class BadEngine(FakeEngine):
+        async def start(self, cb):
+            raise ConnectionError("no route")
+    s, _ = make(BadEngine(), FakeAudio(), FakeHermes(), tmp_path)
+    with pytest.raises(EngineStartError) as info:
+        asyncio.run(s.run())
+    assert isinstance(info.value.__cause__, ConnectionError)
 
 
 def test_constant_background_speech_is_capped_by_max_duration(tmp_path):

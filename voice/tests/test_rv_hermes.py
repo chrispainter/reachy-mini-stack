@@ -50,6 +50,7 @@ def test_task_lane_uses_gateway_default_model():
     httpx.Response(500, text="boom"),
     httpx.Response(200, json={"oops": 1}),
     httpx.Response(200, json={"choices": [{"message": {"content": None}}]}),
+    httpx.Response(200, json={"choices": [{"message": {"content": "  "}}]}),
 ])
 def test_bad_responses_raise_hermes_error(response):
     with pytest.raises(HermesError):
@@ -67,3 +68,11 @@ def test_connection_failure_raises_hermes_error():
 def test_unconfigured_client_raises():
     with pytest.raises(HermesError, match="not configured"):
         asyncio.run(make(lambda r: reply("x"), url="", key="").ask("x", "a", "quick", "s"))
+
+
+def test_non_http_exception_is_wrapped_as_hermes_error():
+    def handler(request):
+        raise httpx.InvalidURL("bad")
+
+    with pytest.raises(HermesError, match="InvalidURL"):
+        asyncio.run(make(handler).ask("x", "a", "task", "s"))

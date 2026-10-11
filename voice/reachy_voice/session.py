@@ -16,6 +16,10 @@ from reachy_voice.policy import SessionPolicy
 RATE = 16000
 
 
+class EngineStartError(Exception):
+    """The engine failed to connect/start (as opposed to failing mid-session)."""
+
+
 class VoiceSession:
     def __init__(self, engine, audio, hermes, policy: SessionPolicy, speech_threshold: float, log: JsonlLog,
                  session_id: str, clock=time.monotonic, tick_s: float = 0.25) -> None:
@@ -31,7 +35,10 @@ class VoiceSession:
 
     async def run(self) -> str:
         opened = self._clock()
-        await self._engine.start(self._callbacks())
+        try:
+            await self._engine.start(self._callbacks())
+        except Exception as exc:  # noqa: BLE001
+            raise EngineStartError(repr(exc)) from exc
         self._log.write("session_open", engine=self._engine.name, session_id=self._session_id)
         mic = asyncio.create_task(self._pump_mic())
         engine_done = asyncio.create_task(self._engine.wait_closed())
@@ -126,10 +133,15 @@ class VoiceSession:
     async def _handle_delegation(self, d: Delegation, started: float) -> None:
         ok = True
         try:
+            if not d.request or not d.request.strip():
+                raise HermesError("empty request")
             text = await self._hermes.ask(d.request, "unknown", d.lane, self._session_id)
         except HermesError as exc:
             ok, text = False, FALLBACK_REPLY
             self._log.write("delegation_error", call_id=d.call_id, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - CancelledError is BaseException and still propagates
+            ok, text = False, FALLBACK_REPLY
+            self._log.write("delegation_error", call_id=d.call_id, error=repr(exc))
         try:
             await self._engine.deliver(d.call_id, text)
         except Exception as exc:  # noqa: BLE001 - a failed delivery must not leave the session pending

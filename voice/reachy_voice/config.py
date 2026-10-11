@@ -1,7 +1,7 @@
 """Settings from the environment (on the robot: ~/reachy-voice/voice.env)."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 ENGINES = ("gemini", "openai", "alternate")
 
@@ -20,12 +20,12 @@ class Settings:
     pending_max_s: float = 330.0
     max_session_s: float = 600.0
     home_agent_url: str = ""
-    home_agent_key: str = ""
+    home_agent_key: str = field(default="", repr=False)
     quick_model: str = "gpt-5.4-nano"
     quick_provider: str = "openai-api"
     log_dir: str = "logs"
-    gemini_api_key: str = ""
-    openai_api_key: str = ""
+    gemini_api_key: str = field(default="", repr=False)
+    openai_api_key: str = field(default="", repr=False)
 
     def has_engine(self, name: str) -> bool:
         return bool(self.gemini_api_key if name == "gemini" else self.openai_api_key if name == "openai" else False)

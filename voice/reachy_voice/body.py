@@ -34,7 +34,7 @@ def _default_head_pose(yaw_deg: float = 0, pitch_deg: float = 0):
 
 class Body:
     def __init__(self, mini, log: JsonlLog, tracking_weight: float = 0.6, library_loader=None, resolver=None,
-                 head_pose=None) -> None:
+                 head_pose=None, step_timeout_s: float = 8.0) -> None:
         self._mini, self._log, self._weight = mini, log, tracking_weight
         self._loader = library_loader or _default_loader
         self._resolve = resolver or _default_resolver
@@ -43,20 +43,36 @@ class Body:
         self._library = None
         self._library_failed = False
         self._mode = "listening"
+        self._step_timeout = step_timeout_s
+        self._motors_off = False
+
+    async def _guarded(self, action: str, step) -> bool:
+        """One blocking SDK step in a thread with a timeout. Logs and swallows errors."""
+        try:
+            await asyncio.wait_for(asyncio.to_thread(step), timeout=self._step_timeout)
+            return True
+        except Exception as exc:  # noqa: BLE001 - motion is best-effort
+            self._log.write("body_error", action=action, error=repr(exc))
+            return False
 
     async def _run(self, action: str, steps) -> bool:
         """Run blocking SDK steps in a thread under the motion lock. Never raises."""
         try:
             async with self._lock:
                 for step in steps:
-                    await asyncio.to_thread(step)
+                    await asyncio.wait_for(asyncio.to_thread(step), timeout=self._step_timeout)
             return True
         except Exception as exc:  # noqa: BLE001 - motion is best-effort
             self._log.write("body_error", action=action, error=repr(exc))
             return False
 
     async def wake(self, doa: float | None) -> None:
-        m, yaw = self._mini, doa_to_yaw(doa)
+        m = self._mini
+        try:
+            yaw = doa_to_yaw(doa)
+        except Exception as exc:  # noqa: BLE001 - treat as no turn
+            self._log.write("body_error", action="wake_yaw", error=repr(exc))
+            yaw = None
         steps = [m.enable_motors, m.wake_up]
         if yaw is not None:
             steps.append(lambda: m.goto_target(body_yaw=yaw, duration=0.8))
@@ -95,8 +111,8 @@ class Body:
         def send(offsets) -> None:
             try:
                 m.client.send_command(SetSpeechOffsetsCmd(offsets=[v * s for v, s in zip(offsets, WOBBLE_SCALE)]))
-            except ConnectionError:
-                pass  # best-effort cosmetic motion
+            except Exception:  # noqa: BLE001 - cosmetic motion must never kill the SDK's wobble thread
+                pass
 
         m.media.enable_wobbling(send)
 
@@ -110,6 +126,7 @@ class Body:
         return self._library
 
     async def express(self, intent: str) -> bool:
+        started = False
         try:
             library = await self._ensure_library()
             if library is None:
@@ -120,6 +137,9 @@ class Body:
                 return False
             m = self._mini
             async with self._lock:
+                if self._mode == "asleep":
+                    return False
+                started = True
                 await asyncio.to_thread(lambda: m.start_head_tracking(weight=0.0))
                 await asyncio.to_thread(m.disable_wobbling)
                 await m.async_play_move(library.get(name), sound=False)
@@ -128,7 +148,8 @@ class Body:
             self._log.write("body_error", action="express", error=repr(exc))
             return False
         finally:
-            await (self.speaking() if self._mode == "speaking" else self.listening())
+            if started and self._mode in ("speaking", "listening"):
+                await (self.speaking() if self._mode == "speaking" else self.listening())
         return True
 
     async def look(self, direction: str) -> None:
@@ -137,8 +158,8 @@ class Body:
             await self._run("look", [lambda: m.start_head_tracking(weight=self._weight)])
         elif direction in _LOOK:
             yaw, pitch = _LOOK[direction]
-            pose = self._pose(yaw_deg=yaw, pitch_deg=pitch)
-            await self._run("look", [lambda: m.goto_target(head=pose, duration=0.6, body_yaw=None)])
+            await self._run("look", [
+                lambda: m.goto_target(head=self._pose(yaw_deg=yaw, pitch_deg=pitch), duration=0.6, body_yaw=None)])
 
     async def rest(self) -> None:
         m = self._mini
@@ -149,14 +170,35 @@ class Body:
         ])
 
     async def sleep(self) -> None:
+        """Mode goes to "asleep" first and the lock is held throughout, so no expression restore can interleave."""
         m = self._mini
-        await self._run("sleep_prepare", [m.stop_head_tracking, m.disable_wobbling])
-        await self._run("sleep", [m.goto_sleep])
-        await self._run("motors_off", [m.disable_motors])
-        self._log.write("body_event", action="sleep")
+        self._mode = "asleep"
+        try:
+            async with self._lock:
+                await self._guarded("sleep_stop_tracking", m.stop_head_tracking)
+                await self._guarded("sleep_disable_wobbling", m.disable_wobbling)
+                await self._guarded("sleep_goto_sleep", m.goto_sleep)
+                if await self._guarded("sleep_disable_motors", m.disable_motors):
+                    self._motors_off = True
+            self._log.write("body_event", action="sleep")
+        except Exception as exc:  # noqa: BLE001
+            self._log.write("body_error", action="sleep", error=repr(exc))
 
     async def shutdown(self) -> None:
-        await self.sleep()  # each step is independent, so motors go off even if goto_sleep fails
+        """Always attempts motors-off, even if cancelled or an SDK call hangs. Re-raises only CancelledError."""
+        self._motors_off = False
+        try:
+            await asyncio.wait_for(asyncio.shield(self.sleep()), timeout=12)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._log.write("body_error", action="shutdown", error=repr(exc))
+        finally:
+            if not self._motors_off:
+                try:  # best effort, deliberately without the motion lock (it may be held by a hung step)
+                    await asyncio.wait_for(asyncio.to_thread(self._mini.disable_motors), timeout=3)
+                except Exception as exc:  # noqa: BLE001
+                    self._log.write("body_error", action="shutdown_motors_off", error=repr(exc))
 
 
 class NullBody:

@@ -1,9 +1,19 @@
 import asyncio
 import json
+import sys
+import time
+
+import pytest
 
 from reachy_voice.body import Body, NullBody
 from reachy_voice.body_calibration import ANTENNA_LISTEN, ANTENNA_REST
 from reachy_voice.log import JsonlLog
+
+
+@pytest.fixture(autouse=True)
+def _no_sdk_protocol(monkeypatch):
+    # force the unscaled-wobble fallback so tests behave the same where reachy_mini is installed
+    monkeypatch.setitem(sys.modules, "reachy_mini.io.protocol", None)
 
 
 class FakeMini:
@@ -18,7 +28,9 @@ class FakeMini:
     def enable_motors(self): self._rec("enable_motors")
     def disable_motors(self): self._rec("disable_motors")
     def wake_up(self): self._rec("wake_up")
-    def goto_sleep(self): self._rec("goto_sleep")
+    def goto_sleep(self):
+        self._rec("goto_sleep")
+        time.sleep(getattr(self, "sleep_s", 0))
     def goto_target(self, **kw): self._rec("goto_target", **kw)
     def start_head_tracking(self, weight=1.0): self._rec("start_head_tracking", weight=weight)
     def stop_head_tracking(self): self._rec("stop_head_tracking")
@@ -34,11 +46,11 @@ class FakeLibrary:
     def get(self, name): return f"move:{name}"
 
 
-def make(tmp_path, mini=None, loader=FakeLibrary, resolver=None):
+def make(tmp_path, mini=None, loader=FakeLibrary, resolver=None, head_pose=None, **kw):
     log_path = tmp_path / "b.jsonl"
     body = Body(mini or FakeMini(), JsonlLog(str(log_path)), tracking_weight=0.6, library_loader=loader,
                 resolver=resolver or (lambda intent, names: {"thinking": "thoughtful1", "welcoming": "welcoming2"}.get(intent)),
-                head_pose=lambda yaw_deg=0, pitch_deg=0: ("pose", yaw_deg, pitch_deg))
+                head_pose=head_pose or (lambda yaw_deg=0, pitch_deg=0: ("pose", yaw_deg, pitch_deg)), **kw)
     return body, log_path
 
 
@@ -129,7 +141,6 @@ def test_look_directions_and_null_body(tmp_path):
 
 
 def test_speaking_uses_scaled_wobble_when_sdk_protocol_available(tmp_path, monkeypatch):
-    import sys
     import types
 
     class SetSpeechOffsetsCmd:
@@ -150,3 +161,102 @@ def test_speaking_uses_scaled_wobble_when_sdk_protocol_available(tmp_path, monke
     assert len(callbacks) == 1
     callbacks[0]((1, 1, 1, 1, 1, 1))
     assert sent[0].offsets == [1.0, 1.0, 0.35, 1.0, 0.35, 1.0]
+    # any exception from the send must not escape into the SDK's wobble thread
+    def boom(cmd):
+        raise RuntimeError("bus error")
+    mini.client.send_command = boom
+    callbacks[0]((1, 1, 1, 1, 1, 1))
+
+
+def test_sleep_wins_over_in_flight_expression_restore(tmp_path):
+    release = None
+
+    class SlowMini(FakeMini):
+        async def async_play_move(self, move, sound=True):
+            self._rec("async_play_move", move, sound=sound)
+            await release.wait()
+
+    async def go():
+        nonlocal release
+        release = asyncio.Event()
+        mini = SlowMini()
+        body, _ = make(tmp_path, mini)
+        await body.speaking()
+        mini.calls.clear()
+        expr = asyncio.create_task(body.express("thinking"))
+        while "async_play_move" not in names(mini):
+            await asyncio.sleep(0.01)
+        slp = asyncio.create_task(body.sleep())
+        await asyncio.sleep(0.05)
+        release.set()
+        await asyncio.gather(expr, slp)
+        return mini
+
+    mini = asyncio.run(go())
+    after = mini.calls[names(mini).index("goto_sleep"):]
+    assert ("start_head_tracking", (), {"weight": 0.6}) not in after
+    assert "enable_wobbling" not in [c[0] for c in after]
+    assert "disable_motors" in names(mini)
+
+
+def test_unresolved_express_does_not_restore_mode(tmp_path):
+    mini = FakeMini()
+    body, _ = make(tmp_path, mini)
+    assert asyncio.run(body.express("ecstatic")) is False
+    assert mini.calls == []
+
+
+def test_sleep_steps_are_individually_guarded(tmp_path):
+    mini = FakeMini(fail={"stop_head_tracking", "goto_sleep"})
+    body, path = make(tmp_path, mini)
+    asyncio.run(body.sleep())
+    assert "disable_motors" in names(mini)
+    assert {e["action"] for e in events(path) if e["event"] == "body_error"} >= {"sleep_stop_tracking", "sleep_goto_sleep"}
+
+
+def test_shutdown_returns_promptly_and_cuts_motors_when_sdk_call_hangs(tmp_path):
+    mini = FakeMini()
+    mini.sleep_s = 1.0
+    body, _ = make(tmp_path, mini, step_timeout_s=0.1)
+    async def go():
+        start = time.monotonic()
+        await body.shutdown()
+        return time.monotonic() - start
+    assert asyncio.run(go()) < 0.9  # measured inside the loop; asyncio.run itself joins the hung thread
+    assert "disable_motors" in names(mini)
+
+
+def test_cancelled_shutdown_still_turns_motors_off(tmp_path):
+    mini = FakeMini()
+    mini.sleep_s = 0.5
+    body, _ = make(tmp_path, mini)
+
+    async def go():
+        task = asyncio.create_task(body.shutdown())
+        while "goto_sleep" not in names(mini):
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(go())
+    assert "disable_motors" in names(mini)
+
+
+def test_value_computation_failures_are_guarded(tmp_path):
+    def bad_pose(yaw_deg=0, pitch_deg=0):
+        raise ValueError("bad pose")
+    mini = FakeMini()
+    body, path = make(tmp_path, mini, head_pose=bad_pose)
+    asyncio.run(body.look("left"))
+    assert any(e["event"] == "body_error" and e["action"] == "look" for e in events(path))
+    body2, path2 = make(tmp_path / "w", FakeMini())
+    (tmp_path / "w").mkdir(exist_ok=True)
+    import reachy_voice.body as bodymod
+    orig = bodymod.doa_to_yaw
+    bodymod.doa_to_yaw = lambda d: 1 / 0
+    try:
+        asyncio.run(body2.wake(doa=1.0))
+    finally:
+        bodymod.doa_to_yaw = orig
+    assert any(e["event"] == "body_error" and e["action"] == "wake_yaw" for e in events(path2))

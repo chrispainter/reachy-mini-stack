@@ -35,23 +35,30 @@ class OpenAILiveEngine:
 
     async def start(self, cb: EngineCallbacks, start_timeout_s: float = 10.0) -> None:
         self._cb, self._started, self._ended = cb, asyncio.Event(), asyncio.Event()
-        self._ws = await self._connect()
-        await self._ws.send(json.dumps({
-            "type": "session.start",
-            "event_id": "start",
-            "session": {
-                "model": self._model,
-                "instructions": self._persona,
-                "audio": {"format": {"type": "audio/pcm", "rate": 16000}, "output": {"voice": self._voice}},
-                "delegation": {"type": "client"},
-            },
-        }))
-        self._rx = asyncio.create_task(self._receive())
         try:
-            await asyncio.wait_for(self._started.wait(), timeout=start_timeout_s)
-        except asyncio.TimeoutError:
+            self._ws = await self._connect()
+        except BaseException:
+            self._ended.set()
+            raise
+        try:
+            await self._ws.send(json.dumps({
+                "type": "session.start",
+                "event_id": "start",
+                "session": {
+                    "model": self._model,
+                    "instructions": self._persona,
+                    "audio": {"format": {"type": "audio/pcm", "rate": 16000}, "output": {"voice": self._voice}},
+                    "delegation": {"type": "client"},
+                },
+            }))
+            self._rx = asyncio.create_task(self._receive())
+            try:
+                await asyncio.wait_for(self._started.wait(), timeout=start_timeout_s)
+            except asyncio.TimeoutError:
+                raise RuntimeError("gpt-live-1 session did not start") from None
+        except BaseException:
             await self._shutdown()
-            raise RuntimeError("gpt-live-1 session did not start") from None
+            raise
 
     async def send_audio(self, frame: np.ndarray) -> None:
         await self._ws.send(json.dumps({"type": "session.input_audio.append",
@@ -65,34 +72,45 @@ class OpenAILiveEngine:
         cb = self._cb
         try:
             async for raw in self._ws:
-                event = json.loads(raw)
-                kind, now = event.get("type"), time.monotonic()
-                if kind == "session.started":
-                    self._started.set()
-                elif kind == "session.output_audio.delta":
-                    samples = pcm16_to_float(base64.b64decode(event["delta"]), 16000, 16000)
-                    if len(samples):
-                        cb.on_audio(samples, now)
-                elif kind == "session.input_transcript.delta":
-                    self._segmenter.on_user_text(event.get("delta", ""))
-                    cb.on_user_text(event.get("delta", ""))
-                elif kind == "session.output_transcript.delta":
-                    self._segmenter.on_robot_text(event.get("delta", ""))
-                    cb.on_robot_text(event.get("delta", ""))
-                elif kind == "session.delegation.created":
-                    request = self._segmenter.request()
-                    cb.on_delegation(Delegation(call_id=event["delegation"]["id"], request=request, lane=choose_lane(request)))
-                elif kind == "session.usage.updated":
-                    cb.on_usage(event.get("usage") or {})
-                elif kind == "error":
-                    cb.on_error(json.dumps(event)[:500])
-                elif kind == "session.closed":
-                    self.close_info = {"reason": event.get("reason"), "usage": event.get("usage")}
-                    return
+                try:
+                    if self._handle(json.loads(raw), time.monotonic()):
+                        return
+                except Exception as exc:  # noqa: BLE001 - one bad event must not kill the loop
+                    cb.on_error(f"gpt-live-1 bad event: {exc!r}")
         except websockets.ConnectionClosed as exc:
             cb.on_error(f"gpt-live-1 connection closed: {exc!r}")
+        except Exception as exc:  # noqa: BLE001
+            cb.on_error(f"gpt-live-1 receive failed: {exc!r}")
         finally:
             self._ended.set()
+
+    def _handle(self, event: dict, now: float) -> bool:
+        """Dispatch one event; return True when the session is closed."""
+        cb = self._cb
+        kind = event.get("type")
+        if kind == "session.started":
+            self._started.set()
+        elif kind == "session.output_audio.delta":
+            samples = pcm16_to_float(base64.b64decode(event["delta"]), 16000, 16000)
+            if len(samples):
+                cb.on_audio(samples, now)
+        elif kind == "session.input_transcript.delta":
+            self._segmenter.on_user_text(event.get("delta", ""))
+            cb.on_user_text(event.get("delta", ""))
+        elif kind == "session.output_transcript.delta":
+            self._segmenter.on_robot_text(event.get("delta", ""))
+            cb.on_robot_text(event.get("delta", ""))
+        elif kind == "session.delegation.created":
+            request = self._segmenter.request()
+            cb.on_delegation(Delegation(call_id=event["delegation"]["id"], request=request, lane=choose_lane(request)))
+        elif kind == "session.usage.updated":
+            cb.on_usage(event.get("usage") or {})
+        elif kind == "error":
+            cb.on_error(json.dumps(event)[:500])
+        elif kind == "session.closed":
+            self.close_info = {"reason": event.get("reason"), "usage": event.get("usage")}
+            return True
+        return False
 
     async def close(self, close_timeout_s: float = 5.0) -> None:
         if self._ws is None:
@@ -104,7 +122,8 @@ class OpenAILiveEngine:
             pass
         except Exception as exc:  # noqa: BLE001 - close() must not raise
             self._report_close_failure(exc)
-        await self._shutdown()
+        finally:
+            await self._shutdown()
 
     def _report_close_failure(self, exc: Exception) -> None:
         if self._cb is not None:

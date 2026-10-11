@@ -154,3 +154,52 @@ def test_close_never_raises_when_ws_close_fails():
         await engine.close()
     asyncio.run(go())
     assert any("close failed" in e for e in got["errors"])
+
+
+def test_bad_event_is_reported_and_receive_loop_continues():
+    ws = FakeWS([
+        {"type": "session.started"},
+        {"type": "session.output_audio.delta"},
+        {"type": "session.input_transcript.delta", "delta": "hello"},
+    ])
+    engine = OpenAILiveEngine("gpt-live-1", "marin", connect=connect_to(ws))
+    got, cb = recorder()
+
+    async def go():
+        await engine.start(cb)
+        async def until_user():
+            while not got["user"]:
+                await asyncio.sleep(0.01)
+        try:
+            await asyncio.wait_for(until_user(), 1)
+        finally:
+            await engine.close()
+    asyncio.run(go())
+    assert any("bad event" in e for e in got["errors"])
+    assert got["user"] == ["hello"]
+
+
+def test_close_cancelled_during_wait_still_shuts_down():
+    ws = FakeWS([{"type": "session.started"}], ack_close=False)
+    engine = OpenAILiveEngine("gpt-live-1", "marin", connect=connect_to(ws))
+
+    async def go():
+        await engine.start(recorder()[1])
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(engine.close(close_timeout_s=5), timeout=0.05)
+    asyncio.run(go())
+    assert ws.closed
+
+
+def test_connect_failure_propagates_and_wait_closed_returns():
+    async def connect():
+        raise ConnectionError("nope")
+
+    engine = OpenAILiveEngine("gpt-live-1", "marin", connect=connect)
+
+    async def go():
+        with pytest.raises(ConnectionError):
+            await engine.start(recorder()[1])
+        await engine.close()
+        await asyncio.wait_for(engine.wait_closed(), 0.1)
+    asyncio.run(go())

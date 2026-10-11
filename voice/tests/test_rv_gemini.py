@@ -154,3 +154,24 @@ def test_close_after_failed_start_is_a_noop():
 
     asyncio.run(go())
     assert connect.exited is False
+
+
+def test_config_declares_body_tools_non_blocking():
+    cfg = GeminiLiveEngine("m", "Kore", connect=FakeConnect(FakeSession([]))).config()
+    decls = {d.name: d for d in cfg.tools[0].function_declarations}
+    assert set(decls) == {"ask_home_agent", "express", "look"}
+    assert all(d.behavior == types.Behavior.NON_BLOCKING for d in decls.values())
+
+
+def test_body_tool_call_is_reported_and_answered_silently():
+    fc = NS(id="b1", name="express", args={"emotion": "happy"})
+    session = FakeSession([[msg(tool_call=NS(function_calls=[fc]))]])
+    body_calls = []
+    got, cb = recorder()
+    cb.on_body_tool = lambda name, args: body_calls.append((name, args))
+    run(GeminiLiveEngine("m", "Kore", connect=FakeConnect(session)), cb)
+    assert body_calls == [("express", {"emotion": "happy"})]
+    assert got["delegations"] == []
+    r = session.tool_responses[0]
+    assert r.id == "b1" and r.response == {"ok": True}
+    assert r.scheduling == types.FunctionResponseScheduling.SILENT

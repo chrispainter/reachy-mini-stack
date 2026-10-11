@@ -9,8 +9,10 @@ from google.genai import types
 
 from reachy_voice.audio import StreamResampler, mic_to_pcm16
 from reachy_voice.engines.base import Delegation, EngineCallbacks
-from reachy_voice.persona import PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
+from reachy_voice.persona import BODY_TOOLS, PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
 from reachy_voice.policy import choose_lane
+
+BODY_TOOL_NAMES = {t["name"] for t in BODY_TOOLS}
 
 
 class GeminiLiveEngine:
@@ -42,7 +44,16 @@ class GeminiLiveEngine:
                             description=TOOL_DESCRIPTION,
                             parameters_json_schema=TOOL_PARAMS,
                             behavior=types.Behavior.NON_BLOCKING,  # explicit; the default was never verified
-                        )
+                        ),
+                        *(
+                            types.FunctionDeclaration(
+                                name=t["name"],
+                                description=t["description"],
+                                parameters_json_schema=t["parameters"],
+                                behavior=types.Behavior.NON_BLOCKING,
+                            )
+                            for t in BODY_TOOLS
+                        ),
                     ]
                 )
             ],
@@ -71,6 +82,14 @@ class GeminiLiveEngine:
                 )
             ]
         )
+
+    async def _ack_body_tool(self, call_id: str, name: str) -> None:
+        try:
+            await self._session.send_tool_response(function_responses=[types.FunctionResponse(
+                id=call_id, name=name, response={"ok": True}, scheduling=types.FunctionResponseScheduling.SILENT)])
+        except Exception as exc:  # noqa: BLE001
+            if self._cb:
+                self._cb.on_error(f"gemini body tool ack failed: {exc!r}")
 
     async def _receive(self) -> None:
         try:
@@ -103,6 +122,10 @@ class GeminiLiveEngine:
                 cb.on_robot_text(sc.output_transcription.text)
         if msg.tool_call:
             for fc in msg.tool_call.function_calls:
+                if fc.name in BODY_TOOL_NAMES:
+                    cb.on_body_tool(fc.name, dict(fc.args or {}))
+                    asyncio.get_running_loop().create_task(self._ack_body_tool(fc.id, fc.name))
+                    continue
                 args = dict(fc.args or {})
                 request = str(args.get("request", "")).strip()
                 lane = args.get("lane") if args.get("lane") in ("quick", "task") else choose_lane(request)

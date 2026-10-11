@@ -1,7 +1,7 @@
 """The interface every voice engine implements, so the session doesn't care which runs."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
@@ -23,6 +23,7 @@ class EngineCallbacks:
     on_delegation: Callable[[Delegation], None]
     on_usage: Callable[[dict], None]
     on_error: Callable[[str], None]
+    on_body_tool: Callable[[str, dict], None] = field(default=lambda name, args: None)
 
 
 class VoiceEngine(Protocol):

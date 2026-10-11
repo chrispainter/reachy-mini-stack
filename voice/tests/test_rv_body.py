@@ -260,3 +260,49 @@ def test_value_computation_failures_are_guarded(tmp_path):
     finally:
         bodymod.doa_to_yaw = orig
     assert any(e["event"] == "body_error" and e["action"] == "wake_yaw" for e in events(path2))
+
+
+def test_step_after_timeout_never_overlaps_the_still_running_thread(tmp_path):
+    spans = []
+
+    def slow():
+        spans.append(["slow", time.monotonic(), None])
+        time.sleep(0.3)
+        spans[-1][2] = time.monotonic()
+
+    def quick():
+        spans.append(["quick", time.monotonic(), time.monotonic()])
+
+    async def go():
+        body, _ = make(tmp_path, FakeMini(), step_timeout_s=0.2)
+        assert await body._run("a", [slow]) is False       # times out, thread keeps running
+        assert await body._run("b", [quick]) is True       # waits for it (0.2 s more), then runs
+    asyncio.run(go())
+    slow_span, quick_span = spans
+    assert quick_span[1] >= slow_span[2]
+
+
+def test_step_is_skipped_as_busy_while_previous_thread_is_still_running(tmp_path):
+    ran = []
+
+    async def go():
+        body, path = make(tmp_path, FakeMini(), step_timeout_s=0.1)
+        assert await body._run("a", [lambda: time.sleep(0.6)]) is False
+        assert await body._run("b", [lambda: ran.append(1)]) is False
+        return path
+    path = asyncio.run(go())
+    assert ran == []
+    assert any(e["event"] == "body_error" and e["action"] == "busy" for e in events(path))
+
+
+def test_speaking_and_listening_are_noops_after_sleep(tmp_path):
+    mini = FakeMini()
+    body, _ = make(tmp_path, mini)
+    asyncio.run(body.sleep())
+    mini.calls.clear()
+    asyncio.run(body.speaking())
+    asyncio.run(body.listening())
+    assert mini.calls == []
+    asyncio.run(body.wake(doa=None))
+    asyncio.run(body.speaking())
+    assert "enable_wobbling" in names(mini)

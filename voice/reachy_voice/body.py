@@ -45,11 +45,38 @@ class Body:
         self._mode = "listening"
         self._step_timeout = step_timeout_s
         self._motors_off = False
+        self._inflight = None  # a timed-out SDK step whose thread is still running
+
+    async def _step(self, step) -> None:
+        """Run one blocking SDK step in a thread. On timeout the thread keeps running; remember it so the
+        next lock holder waits for it instead of issuing overlapping motion."""
+        task = asyncio.ensure_future(asyncio.to_thread(step))
+        task.add_done_callback(lambda f: f.cancelled() or f.exception())  # mark exception retrieved
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._step_timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            self._inflight = task
+            raise
+
+    async def _idle(self) -> bool:
+        """Wait (bounded) for a timed-out step's thread to finish. False means still busy: skip motion."""
+        task = self._inflight
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=self._step_timeout)
+            except Exception:  # noqa: BLE001 - timeout or the step's own error; done() decides
+                pass
+            if not task.done():
+                self._log.write("body_error", action="busy", error="previous SDK step still running")
+                return False
+        return True
 
     async def _guarded(self, action: str, step) -> bool:
         """One blocking SDK step in a thread with a timeout. Logs and swallows errors."""
         try:
-            await asyncio.wait_for(asyncio.to_thread(step), timeout=self._step_timeout)
+            if not await self._idle():
+                return False
+            await self._step(step)
             return True
         except Exception as exc:  # noqa: BLE001 - motion is best-effort
             self._log.write("body_error", action=action, error=repr(exc))
@@ -60,7 +87,9 @@ class Body:
         try:
             async with self._lock:
                 for step in steps:
-                    await asyncio.wait_for(asyncio.to_thread(step), timeout=self._step_timeout)
+                    if not await self._idle():
+                        return False
+                    await self._step(step)
             return True
         except Exception as exc:  # noqa: BLE001 - motion is best-effort
             self._log.write("body_error", action=action, error=repr(exc))
@@ -68,6 +97,7 @@ class Body:
 
     async def wake(self, doa: float | None) -> None:
         m = self._mini
+        self._mode = "listening"  # only wake() leaves "asleep"
         try:
             yaw = doa_to_yaw(doa)
         except Exception as exc:  # noqa: BLE001 - treat as no turn
@@ -83,6 +113,8 @@ class Body:
 
     async def listening(self) -> None:
         m = self._mini
+        if self._mode == "asleep":
+            return
         self._mode = "listening"
         await self._run("listening", [
             lambda: m.start_head_tracking(weight=0.0),
@@ -92,6 +124,8 @@ class Body:
 
     async def speaking(self) -> None:
         m = self._mini
+        if self._mode == "asleep":
+            return
         self._mode = "speaking"
         await self._run("speaking", [
             lambda: m.goto_target(antennas=list(ANTENNA_REST), duration=0.3, body_yaw=None),
@@ -139,9 +173,11 @@ class Body:
             async with self._lock:
                 if self._mode == "asleep":
                     return False
+                if not await self._idle():
+                    return False
                 started = True
-                await asyncio.to_thread(lambda: m.start_head_tracking(weight=0.0))
-                await asyncio.to_thread(m.disable_wobbling)
+                await self._step(lambda: m.start_head_tracking(weight=0.0))
+                await self._step(m.disable_wobbling)
                 await m.async_play_move(library.get(name), sound=False)
             self._log.write("body_event", action="express", intent=intent, move=name)
         except Exception as exc:  # noqa: BLE001

@@ -96,9 +96,9 @@ def test_idle_session_closes_and_closes_engine(tmp_path):
 
 def test_pending_handoff_holds_session_then_delivers(tmp_path):
     engine, hermes = FakeEngine(on_start=delegate), FakeHermes(delay=0.3)
-    s, path = make(engine, FakeAudio(), hermes, tmp_path, idle=0.05)
+    s, path = make(engine, FakeAudio(), hermes, tmp_path, idle=0.1)
     loop_start = asyncio.run(_timed(s))
-    assert loop_start[0] == "idle" and loop_start[1] >= 0.3
+    assert loop_start[0] == "idle" and loop_start[1] >= 0.4
     assert hermes.calls == [("what's on the grocery list", "quick", "sess-1")]
     assert engine.delivered == [("c1", "Milk and eggs.")]
     result = [e for e in events(path) if e["event"] == "delegation_result"][0]
@@ -132,6 +132,37 @@ def test_voiced_audio_is_played_and_interrupt_clears(tmp_path):
     s, path = make(engine, audio, FakeHermes(), tmp_path)
     asyncio.run(s.run())
     assert len(audio.played) == 1 and audio.cleared == 1
+
+
+def test_hermes_never_returning_hits_pending_timeout(tmp_path):
+    engine, hermes = FakeEngine(on_start=delegate), FakeHermes(delay=10)
+    s, _ = make(engine, FakeAudio(), hermes, tmp_path, idle=0.05, pending=0.2)
+    assert asyncio.run(s.run()) == "pending_timeout"
+
+
+def test_delegation_during_close_is_ignored(tmp_path):
+    class ClosingEngine(FakeEngine):
+        async def close(self):
+            self.cb.on_delegation(Delegation("late", "too late", "quick"))
+            self.cb.on_audio(VOICED, 0.0)
+            await super().close()
+    engine, hermes, audio = ClosingEngine(), FakeHermes(), FakeAudio()
+    s, path = make(engine, audio, hermes, tmp_path)
+    asyncio.run(s.run())
+    assert hermes.calls == [] and audio.played == []
+    assert any(e["event"] == "delegation_ignored" for e in events(path))
+
+
+def test_failing_playback_does_not_break_session(tmp_path):
+    class BadAudio(FakeAudio):
+        def play(self, samples):
+            raise RuntimeError("speaker gone")
+    def speak(engine):
+        engine.cb.on_audio(VOICED, 0.0)
+    engine = FakeEngine(on_start=speak)
+    s, path = make(engine, BadAudio(), FakeHermes(), tmp_path)
+    assert asyncio.run(s.run()) == "idle"
+    assert any(e["event"] == "callback_error" for e in events(path))
 
 
 async def _timed(session):

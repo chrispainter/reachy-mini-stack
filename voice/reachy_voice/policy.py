@@ -9,7 +9,7 @@ _QUICK = re.compile(r"\b(list|lists|note|notes|grocer\w*|shopping|what'?s on|add
 @dataclass(frozen=True)
 class SessionPolicy:
     idle_timeout_s: float = 30.0
-    pending_max_s: float = 300.0
+    pending_max_s: float = 330.0
     max_session_s: float = 600.0
 
     def should_close(self, now: float, opened_at: float, last_activity: float, pending_since: float | None) -> str | None:

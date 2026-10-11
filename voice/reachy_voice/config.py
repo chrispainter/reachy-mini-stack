@@ -17,7 +17,7 @@ class Settings:
     wake_threshold: float = 0.5
     speech_threshold: float = 0.015
     idle_timeout_s: float = 30.0
-    pending_max_s: float = 300.0
+    pending_max_s: float = 330.0
     max_session_s: float = 600.0
     home_agent_url: str = ""
     home_agent_key: str = ""

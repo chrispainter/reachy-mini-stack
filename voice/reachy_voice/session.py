@@ -26,6 +26,8 @@ class VoiceSession:
         self._user = UserSpeech(threshold=speech_threshold)
         self._pending: dict[str, float] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._last_delivery: float | None = None
+        self._closing = False
 
     async def run(self) -> str:
         opened = self._clock()
@@ -43,18 +45,22 @@ class VoiceSession:
                         self._log.write("mic_error", error=repr(mic.exception()))
                     return "mic_closed"
                 now = self._clock()
-                last = max(opened, self._user.last_voice or opened, self._out.voiced_end)
+                last = max(opened, self._user.last_voice or opened, self._out.voiced_end,
+                           self._last_delivery or opened)
                 pending_since = min(self._pending.values()) if self._pending else None
                 reason = self._policy.should_close(now, opened, last, pending_since)
                 if reason:
                     return reason
         finally:
+            self._closing = True
             mic.cancel()
             engine_done.cancel()
             for task in list(self._tasks):
                 task.cancel()
-            await asyncio.gather(mic, engine_done, *self._tasks, return_exceptions=True)
-            await self._engine.close()
+            try:
+                await asyncio.gather(mic, engine_done, *self._tasks, return_exceptions=True)
+            finally:
+                await self._engine.close()
 
     def _callbacks(self) -> EngineCallbacks:
         name = self._engine.name
@@ -75,6 +81,14 @@ class VoiceSession:
             await self._engine.send_audio(frame)
 
     def _on_audio(self, samples: np.ndarray, now: float) -> None:
+        if self._closing:
+            return
+        try:
+            self._handle_audio(samples)
+        except Exception as exc:  # noqa: BLE001 - never kill the engine's receive loop
+            self._log.write("callback_error", where="on_audio", error=repr(exc))
+
+    def _handle_audio(self, samples: np.ndarray) -> None:
         play, voiced_start = self._out.accept(samples, RATE, self._clock())
         if not play:
             return
@@ -85,11 +99,23 @@ class VoiceSession:
                 self._log.write("first_audio", engine=self._engine.name, latency_s=latency)
 
     def _on_interrupted(self, now: float) -> None:
-        self._audio.clear()
-        self._out.clear(self._clock())
-        self._log.write("interrupted", engine=self._engine.name)
+        try:
+            self._audio.clear()
+            self._out.clear(self._clock())
+            self._log.write("interrupted", engine=self._engine.name)
+        except Exception as exc:  # noqa: BLE001
+            self._log.write("callback_error", where="on_interrupted", error=repr(exc))
 
     def _on_delegation(self, d: Delegation) -> None:
+        try:
+            if self._closing:
+                self._log.write("delegation_ignored", call_id=d.call_id, reason="session closing")
+                return
+            self._start_delegation(d)
+        except Exception as exc:  # noqa: BLE001
+            self._log.write("callback_error", where="on_delegation", error=repr(exc))
+
+    def _start_delegation(self, d: Delegation) -> None:
         started = self._clock()
         self._pending[d.call_id] = started
         self._log.write("delegation", engine=self._engine.name, call_id=d.call_id, lane=d.lane, request=d.request)
@@ -111,5 +137,6 @@ class VoiceSession:
             self._log.write("delivery_error", call_id=d.call_id, error=repr(exc))
         finally:
             self._pending.pop(d.call_id, None)
+            self._last_delivery = self._clock()
             self._log.write("delegation_result", call_id=d.call_id, lane=d.lane, ok=ok,
                             seconds=round(self._clock() - started, 2))

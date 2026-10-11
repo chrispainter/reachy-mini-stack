@@ -11,7 +11,7 @@ def test_defaults_with_both_keys():
     assert s.gemini_model == "gemini-3.8-live" and s.openai_model == "gpt-live-1"
     assert s.wake_model == "hey_jarvis" and s.wake_threshold == 0.5
     assert s.speech_threshold == 0.015
-    assert (s.idle_timeout_s, s.pending_max_s, s.max_session_s) == (30.0, 300.0, 600.0)
+    assert (s.idle_timeout_s, s.pending_max_s, s.max_session_s) == (30.0, 330.0, 600.0)
     assert (s.quick_model, s.quick_provider) == ("gpt-5.4-nano", "openai-api")
 
 

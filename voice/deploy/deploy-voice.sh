@@ -39,14 +39,19 @@ mv voice.env.new voice.env && chmod 600 voice.env
 sudo install -m 644 reachy-voice.service /etc/systemd/system/reachy-voice.service
 sudo systemctl daemon-reload
 if [ "$ENABLE" = "--enable" ]; then sudo systemctl enable reachy-voice; fi
+touch .deploy-marker
 sudo systemctl restart reachy-voice
 sleep 8
 systemctl is-active reachy-voice
-# Model load can take longer than the sleep; wait up to 30 s for the "ready" line.
+# Model load can take longer than the sleep; wait up to 30 s for a fresh log with a "ready" line.
+f=""
 for _ in $(seq 15); do
-  f=$(ls -t logs/voice-*.jsonl 2>/dev/null | head -1 || true)
-  [ -n "$f" ] && grep -q '"ready"' "$f" && break
+  for c in $(find logs -name 'voice-*.jsonl' -newer .deploy-marker); do
+    grep -q '"ready"' "$c" && f="$c"
+  done
+  [ -n "$f" ] && break
   sleep 2
 done
-tail -n 3 "$(ls -t logs/voice-*.jsonl | head -1)"
+[ -n "$f" ] || { echo "no fresh ready log"; exit 1; }
+tail -n 3 "$f"
 REMOTE

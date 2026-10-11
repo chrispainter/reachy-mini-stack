@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import signal
 import time
 
 from reachy_mini import ReachyMini
@@ -24,41 +25,54 @@ async def _run_session(name: str, settings: Settings, audio: RobotAudio, hermes:
 
 
 async def _session_with_fallback(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient,
-                                 log: JsonlLog) -> str:
+                                 log: JsonlLog) -> tuple[str, str]:
+    """Run a session; returns (end reason, engine that actually ran)."""
     candidates = [name] + ([other_engine(name)] if settings.has_engine(other_engine(name)) else [])
     for engine in candidates:
         try:
-            return await _run_session(engine, settings, audio, hermes, log)
+            return await _run_session(engine, settings, audio, hermes, log), engine
         except Exception as exc:  # noqa: BLE001 - connection/auth failures fall back to the other engine
             log.write("session_error", engine=engine, error=repr(exc))
     audio.chime("error")
-    return "error"
+    return "error", name
+
+
+async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: JsonlLog) -> None:
+    chooser = EngineChooser(settings.engine)
+    audio = RobotAudio(mini.media)
+    audio.start()
+    try:
+        wake = WakeWord(load_wake_model(settings.wake_model), settings.wake_threshold)
+        log.write("ready", engine_mode=settings.engine, wake_model=settings.wake_model)
+        while True:
+            async for frame in audio.frames():
+                if wake.feed(frame, time.monotonic()):
+                    break
+            audio.chime("wake")
+            name = chooser.next()
+            log.write("wake", engine=name)
+            reason, engine_used = await _session_with_fallback(name, settings, audio, hermes, log)
+            log.write("session_end", engine=engine_used, reason=reason)
+            audio.chime("sleep")
+            wake.reset(time.monotonic())
+    finally:
+        audio.stop()
 
 
 async def amain(settings: Settings) -> None:
     log = JsonlLog(os.path.join(settings.log_dir, f"voice-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"))
     hermes = HermesClient(settings.home_agent_url, settings.home_agent_key, settings.quick_model, settings.quick_provider)
-    chooser = EngineChooser(settings.engine)
-    with ReachyMini() as mini:
-        audio = RobotAudio(mini.media)
-        audio.start()
-        wake = WakeWord(load_wake_model(settings.wake_model), settings.wake_threshold)
-        log.write("ready", engine_mode=settings.engine, wake_model=settings.wake_model)
-        try:
-            while True:
-                async for frame in audio.frames():
-                    if wake.feed(frame, time.monotonic()):
-                        break
-                audio.chime("wake")
-                name = chooser.next()
-                log.write("wake", engine=name)
-                reason = await _session_with_fallback(name, settings, audio, hermes, log)
-                log.write("session_end", engine=name, reason=reason)
-                audio.chime("sleep")
-                wake.reset(time.monotonic())
-        finally:
-            audio.stop()
-            await hermes.aclose()
+    task = asyncio.current_task()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, task.cancel)
+    try:
+        with ReachyMini() as mini:
+            await _listen_loop(mini, settings, hermes, log)
+    except asyncio.CancelledError:
+        log.write("shutdown")  # SIGTERM/SIGINT: a normal exit
+    finally:
+        await hermes.aclose()
 
 
 def main() -> None:

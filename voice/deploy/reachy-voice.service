@@ -1,7 +1,9 @@
 [Unit]
 Description=Reachy voice assistant (wake word + live voice + Hermes)
 After=reachy-mini-daemon.service network-online.target
-Wants=network-online.target
+Wants=network-online.target reachy-mini-daemon.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 User=pollen

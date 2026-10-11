@@ -42,3 +42,16 @@ def test_repr_does_not_leak_keys():
     s = load_settings({"GEMINI_API_KEY": "gem-secret", "OPENAI_API_KEY": "oai-secret", "HOME_AGENT_KEY": "home-secret"})
     text = repr(s)
     assert "gem-secret" not in text and "oai-secret" not in text and "home-secret" not in text
+
+
+def test_body_settings_defaults_and_overrides():
+    s = load_settings(KEYS)
+    assert (s.body_enabled, s.idle_awake_s, s.expression_min_gap_s, s.tracking_weight) == (True, 300.0, 8.0, 0.6)
+    s = load_settings({**KEYS, "BODY_ENABLED": "false", "IDLE_AWAKE_S": "60", "TRACKING_WEIGHT": "0.4"})
+    assert (s.body_enabled, s.idle_awake_s, s.tracking_weight) == (False, 60.0, 0.4)
+    assert load_settings({**KEYS, "BODY_ENABLED": "1"}).body_enabled is True
+
+
+def test_bad_body_flag_is_rejected():
+    with pytest.raises(ValueError, match="BODY_ENABLED"):
+        load_settings({**KEYS, "BODY_ENABLED": "maybe"})

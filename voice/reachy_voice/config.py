@@ -24,6 +24,10 @@ class Settings:
     quick_model: str = "gpt-5.4-nano"
     quick_provider: str = "openai-api"
     log_dir: str = "logs"
+    body_enabled: bool = True
+    idle_awake_s: float = 300.0
+    expression_min_gap_s: float = 8.0
+    tracking_weight: float = 0.6
     gemini_api_key: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)
 
@@ -42,6 +46,16 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         value = env.get(name, "")
         return float(value) if value and value.strip() else default
 
+    def flag(name: str, default: bool) -> bool:
+        value = (env.get(name) or "").strip().lower()
+        if not value:
+            return default
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"{name} must be true or false, got {value!r}")
+
     s = Settings(
         engine=text("VOICE_ENGINE", d.engine).lower(),
         gemini_model=text("GEMINI_MODEL", d.gemini_model),
@@ -59,6 +73,10 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         quick_model=text("QUICK_MODEL", d.quick_model),
         quick_provider=text("QUICK_PROVIDER", d.quick_provider),
         log_dir=text("VOICE_LOG_DIR", d.log_dir),
+        body_enabled=flag("BODY_ENABLED", d.body_enabled),
+        idle_awake_s=number("IDLE_AWAKE_S", d.idle_awake_s),
+        expression_min_gap_s=number("EXPRESSION_MIN_GAP_S", d.expression_min_gap_s),
+        tracking_weight=number("TRACKING_WEIGHT", d.tracking_weight),
         gemini_api_key=text("GEMINI_API_KEY", ""),
         openai_api_key=text("OPENAI_API_KEY", ""),
     )

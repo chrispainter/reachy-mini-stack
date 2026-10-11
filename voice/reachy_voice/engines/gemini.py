@@ -52,8 +52,9 @@ class GeminiLiveEngine:
 
     async def start(self, cb: EngineCallbacks) -> None:
         self._cb, self._ended = cb, asyncio.Event()
-        self._cm = self._connect(model=self._model, config=self.config())
-        self._session = await self._cm.__aenter__()
+        cm = self._connect(model=self._model, config=self.config())
+        self._session = await cm.__aenter__()
+        self._cm = cm  # only once entered, so close() after a failed start is a no-op
         self._rx = asyncio.create_task(self._receive())
 
     async def send_audio(self, frame: np.ndarray) -> None:
@@ -112,12 +113,18 @@ class GeminiLiveEngine:
 
     async def close(self) -> None:
         self._closing = True
-        if self._cm is not None:
-            cm, self._cm = self._cm, None
-            await cm.__aexit__(None, None, None)
-        if self._rx is not None:
-            self._rx.cancel()
-            await asyncio.gather(self._rx, return_exceptions=True)
+        try:
+            if self._cm is not None:
+                cm, self._cm = self._cm, None
+                try:
+                    await asyncio.wait_for(cm.__aexit__(None, None, None), timeout=5.0)
+                except Exception as exc:  # noqa: BLE001 - includes TimeoutError; close() must not raise
+                    if self._cb is not None:
+                        self._cb.on_error(f"gemini close failed: {exc!r}")
+        finally:
+            if self._rx is not None:
+                self._rx.cancel()
+                await asyncio.gather(self._rx, return_exceptions=True)
 
     async def wait_closed(self) -> None:
         await self._ended.wait()

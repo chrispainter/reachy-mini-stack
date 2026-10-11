@@ -112,3 +112,45 @@ def test_session_end_finishes_receive_loop_and_close_exits_context():
     got, cb = recorder()
     run(GeminiLiveEngine("m", "Kore", connect=connect), cb)
     assert connect.exited and got["errors"] == []
+
+
+def test_close_survives_failing_aexit_and_still_stops_receive_task():
+    connect = FakeConnect(FakeSession([]))
+
+    async def bad_exit(*exc):
+        raise RuntimeError("boom")
+
+    connect.__aexit__ = bad_exit  # instance attr is ignored by `async with`, but engine calls it directly
+    engine = GeminiLiveEngine("m", "Kore", connect=connect)
+    got, cb = recorder()
+
+    async def go():
+        await engine.start(cb)
+        await engine.close()  # must not raise
+        assert engine._rx.done()
+
+    asyncio.run(go())
+    assert any("close failed" in e for e in got["errors"])
+
+
+def test_close_after_failed_start_is_a_noop():
+    connect = FakeConnect(FakeSession([]))
+
+    async def bad_enter():
+        raise ConnectionError("no route")
+
+    connect.__aenter__ = bad_enter
+    engine = GeminiLiveEngine("m", "Kore", connect=connect)
+    got, cb = recorder()
+
+    async def go():
+        try:
+            await engine.start(cb)
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("start should have raised")
+        await engine.close()
+
+    asyncio.run(go())
+    assert connect.exited is False

@@ -1,9 +1,12 @@
 """Robot mic and speaker through the SDK's local media path, plus short earcons."""
 
 import asyncio
+from collections import deque
 from collections.abc import AsyncIterator
 
 import numpy as np
+
+from reachy_voice.body_policy import median_recent
 
 RATE = 16000
 
@@ -19,6 +22,7 @@ CHIMES = {"wake": _tones([660, 880]), "sleep": _tones([880, 660]), "error": _ton
 class RobotAudio:
     def __init__(self, media) -> None:
         self._media = media
+        self._doa: deque[tuple[float, float]] = deque(maxlen=200)
 
     def start(self) -> None:
         self._media.start_recording()
@@ -45,3 +49,19 @@ class RobotAudio:
 
     def chime(self, kind: str) -> None:
         self.play(CHIMES[kind])
+
+    def sample_doa(self, now: float) -> None:
+        """Record the mic array's direction of arrival if it currently flags speech."""
+        try:
+            result = self._media.get_DoA()
+        except Exception:  # noqa: BLE001
+            return
+        if not result:
+            return
+        angle, speech = result
+        if speech:
+            self._doa.append((now, float(angle)))
+
+    def doa(self, now: float) -> float | None:
+        """Median direction of arrival (radians) over the last 1.5 s of speech readings, else None."""
+        return median_recent(self._doa, now)

@@ -65,3 +65,33 @@ def test_jsonl_log_write_never_raises(tmp_path, monkeypatch):
     cyc = []
     cyc.append(cyc)
     log.write("cyclic", bad=cyc)  # ValueError from json: swallowed
+
+
+def test_robot_audio_doa_uses_median_of_recent_speech_readings():
+    from reachy_voice.robot_audio import RobotAudio
+
+    class Media:
+        def __init__(self):
+            self.readings = iter([(1.0, True), (9.0, False), (1.2, True), None, (3.0, True)])
+
+        def get_DoA(self):
+            return next(self.readings)
+
+    audio = RobotAudio(Media())
+    assert audio.doa(0.0) is None
+    for t in (0.0, 0.1, 0.2, 0.3, 0.4):
+        audio.sample_doa(t)
+    assert audio.doa(0.5) == 1.2
+    assert audio.doa(5.0) is None
+
+
+def test_robot_audio_sample_doa_survives_daemon_errors():
+    from reachy_voice.robot_audio import RobotAudio
+
+    class Media:
+        def get_DoA(self):
+            raise RuntimeError("daemon down")
+
+    audio = RobotAudio(Media())
+    audio.sample_doa(0.0)
+    assert audio.doa(0.1) is None

@@ -1,6 +1,8 @@
 """Pure decisions for Reachy's body: when to express, when to sleep, where to turn."""
 
 import math
+import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from reachy_voice import body_calibration as cal
@@ -33,6 +35,12 @@ def doa_to_yaw(angle: float | None) -> float | None:
     delta = cal.DOA_SIGN * (angle - cal.DOA_FRONT_RAD)
     delta = (delta + math.pi) % (2 * math.pi) - math.pi  # wrap to [-pi, pi)
     return max(-cal.MAX_TURN_RAD, min(cal.MAX_TURN_RAD, delta))
+
+
+def median_recent(samples: Iterable[tuple[float, float]], now: float, window_s: float = 1.5) -> float | None:
+    """Median angle of (time, angle) samples no older than window_s, or None if there are none."""
+    angles = [angle for t, angle in samples if now - t <= window_s]
+    return statistics.median(angles) if angles else None
 
 
 @dataclass

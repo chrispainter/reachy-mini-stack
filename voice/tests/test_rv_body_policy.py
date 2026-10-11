@@ -50,3 +50,26 @@ def test_gate_spacing_user_speech_and_utterance_grace():
     assert not g.allow(now=20, last_user_voice=None, utterance_started_at=19.5)       # utterance just began
     assert g.allow(now=20, last_user_voice=19.0, utterance_started_at=18.0)
     assert not g.allow(now=21, last_user_voice=None, utterance_started_at=None)
+
+
+def test_median_recent_empty_is_none():
+    from reachy_voice.body_policy import median_recent
+    assert median_recent([], 10.0) is None
+
+
+def test_median_recent_excludes_old_entries():
+    from reachy_voice.body_policy import median_recent
+    assert median_recent([(7.0, 3.0)], 10.0) is None
+    assert median_recent([(7.0, 3.0), (9.0, 1.0)], 10.0) == 1.0
+
+
+def test_median_recent_takes_median_of_several():
+    from reachy_voice.body_policy import median_recent
+    samples = [(9.0, 1.5), (9.5, 0.2), (9.8, 1.4), (9.9, 1.6)]
+    assert median_recent(samples, 10.0) == 1.45
+    assert median_recent([(9.0, 0.0), (9.5, 5.0), (9.9, 1.0)], 10.0) == 1.0
+
+
+def test_median_recent_window_boundary_inclusive():
+    from reachy_voice.body_policy import median_recent
+    assert median_recent([(8.5, 2.0)], 10.0) == 2.0

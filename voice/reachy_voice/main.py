@@ -8,8 +8,11 @@ import time
 
 from reachy_mini import ReachyMini
 
+from reachy_voice.body import Body, NullBody
+from reachy_voice.body_policy import CUES, AwakeTimer, ExpressionGate
 from reachy_voice.config import Settings, load_settings
 from reachy_voice.engines import make_engine
+from reachy_voice.expression_picker import ExpressionPicker
 from reachy_voice.hermes import HermesClient
 from reachy_voice.log import JsonlLog
 from reachy_voice.policy import EngineChooser, SessionPolicy, other_engine
@@ -18,20 +21,22 @@ from reachy_voice.session import EngineStartError, VoiceSession
 from reachy_voice.wake import WakeWord, load_wake_model
 
 
-async def _run_session(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient, log: JsonlLog) -> str:
+async def _run_session(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient, log: JsonlLog,
+                       body=None, gate=None, picker=None) -> str:
     policy = SessionPolicy(settings.idle_timeout_s, settings.pending_max_s, settings.max_session_s)
     session = VoiceSession(make_engine(name, settings), audio, hermes, policy, settings.speech_threshold, log,
-                           session_id=f"reachy-{name}-{int(time.time())}")
+                           session_id=f"reachy-{name}-{int(time.time())}", body=body, gate=gate,
+                           picker=picker if name == "openai" else None)
     return await session.run()
 
 
 async def _session_with_fallback(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient,
-                                 log: JsonlLog) -> tuple[str, str]:
+                                 log: JsonlLog, body=None, gate=None, picker=None) -> tuple[str, str]:
     """Run a session; returns (end reason, engine that actually ran)."""
     candidates = [name] + ([other_engine(name)] if settings.has_engine(other_engine(name)) else [])
     for engine in candidates:
         try:
-            return await _run_session(engine, settings, audio, hermes, log), engine
+            return await _run_session(engine, settings, audio, hermes, log, body, gate, picker), engine
         except EngineStartError as exc:  # only a failure to start falls back to the other engine
             log.write("session_error", engine=engine, error=repr(exc), phase="start")
         except Exception as exc:  # noqa: BLE001 - mid-session failure: end the session, no engine swap
@@ -44,24 +49,66 @@ async def _session_with_fallback(name: str, settings: Settings, audio: RobotAudi
 
 async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: JsonlLog, pruned_logs: int = 0) -> None:
     chooser = EngineChooser(settings.engine)
+    body = Body(mini, log, tracking_weight=settings.tracking_weight) if settings.body_enabled else NullBody()
+    timer = AwakeTimer(settings.idle_awake_s)
+    gate = ExpressionGate(min_gap_s=settings.expression_min_gap_s)
+    picker = ExpressionPicker(settings.openai_api_key) if settings.openai_api_key else None
     audio = RobotAudio(mini.media)
     audio.start()
     try:
+        await body.shutdown()  # start asleep with motors off, however the robot was left
         wake = WakeWord(load_wake_model(settings.wake_model), settings.wake_threshold)
-        log.write("ready", engine_mode=settings.engine, wake_model=settings.wake_model, pruned_logs=pruned_logs)
+        log.write("ready", engine_mode=settings.engine, wake_model=settings.wake_model, pruned_logs=pruned_logs,
+                  body_enabled=settings.body_enabled)
         while True:
+            next_check = time.monotonic() + 1.0
             async for frame in audio.frames():
-                if wake.feed(frame, time.monotonic()):
+                now = time.monotonic()
+                audio.sample_doa(now)
+                if wake.feed(frame, now):
                     break
+                if now >= next_check:
+                    next_check = now + 1.0
+                    if timer.should_sleep(now):
+                        await body.sleep()
+                        timer.on_sleep()
+                        log.write("body_sleep")
+            doa = audio.doa(time.monotonic())
             audio.chime("wake")
+            if not timer.awake:
+                await body.wake(doa)
+                timer.on_wake(time.monotonic())
+                if gate.allow(time.monotonic(), None, None):
+                    asyncio.get_running_loop().create_task(body.express(CUES["wake"]))
+            else:
+                timer.on_wake(time.monotonic())
             name = chooser.next()
-            log.write("wake", engine=name)
-            reason, engine_used = await _session_with_fallback(name, settings, audio, hermes, log)
+            log.write("wake", engine=name, doa=doa)
+            reason, engine_used = await _session_with_fallback(name, settings, audio, hermes, log, body, gate, picker)
             log.write("session_end", engine=engine_used, reason=reason)
             audio.chime("sleep")
+            if reason != "error" and gate.allow(time.monotonic(), None, None):
+                await body.express(CUES["session_end"])
+            await body.rest()
+            timer.on_session_end(time.monotonic())
             wake.reset(time.monotonic())
     finally:
-        audio.stop()
+        cancelled = False
+        try:
+            await asyncio.wait_for(body.shutdown(), timeout=10)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception as exc:  # noqa: BLE001
+            log.write("body_error", action="main_shutdown", error=repr(exc))
+        try:
+            audio.stop()
+        finally:
+            try:
+                if picker is not None:
+                    await picker.aclose()
+            finally:
+                if cancelled:
+                    raise asyncio.CancelledError
 
 
 LOG_RETENTION_S = 30 * 24 * 3600

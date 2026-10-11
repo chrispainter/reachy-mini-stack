@@ -12,6 +12,24 @@ household's Hermes agent on the Pi without going silent.
   up to `PENDING_MAX_S` (330). They never run past `MAX_SESSION_S` (600).
 - Logs: `~/reachy-voice/logs/voice-*.jsonl` (first_audio latency, delegations, session ends).
 
+## Body language
+
+Reachy moves with the conversation. Four states: **sleeping** (head down, motors off), **awake in
+conversation** (wake-up move, turn toward the voice, still and antennas perked while you talk, head
+motion and face tracking while it talks, expressions), **awake idle** (head at neutral, motors on, so a
+quick second "Hey Jarvis" needs no wake-up move), then **sleep** once it has been idle for
+`IDLE_AWAKE_S`. The service starts asleep.
+
+Settings in `~/reachy-voice/voice.env` on the robot:
+
+- `BODY_ENABLED` (default `true`): `false` gives voice-only, exactly as before.
+- `IDLE_AWAKE_S` (default 300): idle time after a conversation before Reachy goes to sleep.
+- `EXPRESSION_MIN_GAP_S` (default 8): minimum spacing between expressions, across sessions.
+- `TRACKING_WEIGHT` (default 0.6): how strongly the head follows a face while Reachy talks.
+
+Calibration (direction-of-arrival mapping, turn limits, antenna poses) lives in
+`reachy_voice/body_calibration.py`; see `BODY_NOTES.md`.
+
 ## Deploy and operate (from the Mac)
 
     voice/deploy/deploy-voice.sh            # deploy + restart the service

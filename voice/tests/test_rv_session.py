@@ -4,6 +4,7 @@ import json
 import numpy as np
 import pytest
 
+from reachy_voice.body_policy import ExpressionGate
 from reachy_voice.engines.base import Delegation
 from reachy_voice.hermes import HermesError
 from reachy_voice.log import JsonlLog
@@ -202,3 +203,107 @@ async def _timed(session):
     start = loop.time()
     reason = await session.run()
     return reason, loop.time() - start
+
+
+class FakeBody:
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+
+    async def _rec(self, *call):
+        self.calls.append(call)
+        if self.fail:
+            raise RuntimeError("motor fault")
+
+    async def listening(self): await self._rec("listening")
+    async def speaking(self): await self._rec("speaking")
+    async def express(self, intent): await self._rec("express", intent); return True
+    async def look(self, direction): await self._rec("look", direction)
+
+
+class FakePicker:
+    def __init__(self, answer):
+        self.answer, self.texts = answer, []
+
+    async def pick(self, text):
+        self.texts.append(text)
+        return self.answer
+
+
+def make_body_session(engine, audio, hermes, tmp_path, body, picker=None, idle=0.3, gap=0.0):
+    log = JsonlLog(str(tmp_path / "v.jsonl"))
+    gate = ExpressionGate(min_gap_s=gap, user_quiet_s=0.0, utterance_grace_s=0.0)
+    s = VoiceSession(engine, audio, hermes, SessionPolicy(idle, 5.0, 5.0), 0.015, log, "sess-1", tick_s=0.01,
+                     body=body, gate=gate, picker=picker)
+    return s, tmp_path / "v.jsonl"
+
+
+def test_speaking_transitions_drive_body_and_picker(tmp_path):
+    def speak(engine):
+        engine.cb.on_robot_text("That's wonderful news!")
+        engine.cb.on_audio(VOICED, 0.0)
+    body, picker = FakeBody(), FakePicker("happy")
+    s, _ = make_body_session(FakeEngine(on_start=speak), FakeAudio(), FakeHermes(), tmp_path, body, picker)
+    asyncio.run(s.run())
+    kinds = [c[0] for c in body.calls]
+    assert "speaking" in kinds and "listening" in kinds[kinds.index("speaking"):]
+    assert picker.texts == ["That's wonderful news!"] and ("express", "happy") in body.calls
+
+
+def test_handoff_cues_and_gate_drops_extras(tmp_path):
+    body = FakeBody()
+    s, path = make_body_session(FakeEngine(on_start=delegate), FakeAudio(), FakeHermes(delay=0.05), tmp_path, body,
+                                gap=60.0)
+    asyncio.run(s.run())
+    expresses = [c for c in body.calls if c[0] == "express"]
+    assert expresses == [("express", "thinking")]                  # handoff_ok cue dropped by the 60 s gap
+    assert any(e["event"] == "expression_dropped" for e in events(path))
+
+
+def test_body_tools_from_engine(tmp_path):
+    def tools(engine):
+        engine.cb.on_body_tool("express", {"emotion": "happy"})
+        engine.cb.on_body_tool("look", {"direction": "left"})
+        engine.cb.on_body_tool("express", {"emotion": "not-a-thing"})
+    body = FakeBody()
+    s, _ = make_body_session(FakeEngine(on_start=tools), FakeAudio(), FakeHermes(), tmp_path, body)
+    asyncio.run(s.run())
+    assert ("express", "happy") in body.calls and ("look", "left") in body.calls
+    assert ("express", "not-a-thing") not in body.calls
+
+
+def test_failing_body_never_breaks_the_conversation(tmp_path):
+    def speak(engine):
+        engine.cb.on_audio(VOICED, 0.0)
+        delegate(engine)
+    engine = FakeEngine(on_start=speak)
+    s, _ = make_body_session(engine, FakeAudio(), FakeHermes(), tmp_path, FakeBody(fail=True))
+    assert asyncio.run(s.run()) == "idle"
+    assert engine.delivered == [("c1", "Milk and eggs.")]
+
+
+def test_failed_handoff_uses_failed_cue_before_deliver(tmp_path):
+    body = FakeBody()
+    s, _ = make_body_session(FakeEngine(on_start=delegate), FakeAudio(), FakeHermes(fail=True), tmp_path, body)
+    asyncio.run(s.run())
+    assert [c[1] for c in body.calls if c[0] == "express"] == ["thinking", "uncertain"]
+
+
+def test_stuck_body_does_not_hang_teardown(tmp_path, monkeypatch):
+    import reachy_voice.session as sess
+    monkeypatch.setattr(sess, "BODY_TEARDOWN_TIMEOUT_S", 0.1)
+
+    class StuckBody(FakeBody):
+        async def listening(self): await asyncio.Event().wait()
+        async def speaking(self): await asyncio.Event().wait()
+    s, path = make_body_session(FakeEngine(on_start=lambda e: e.cb.on_audio(VOICED, 0.0)), FakeAudio(),
+                                FakeHermes(), tmp_path, StuckBody())
+    assert asyncio.run(asyncio.wait_for(s.run(), 5)) == "idle"
+    assert any(e["event"] == "body_error" and e["action"] == "teardown_timeout" for e in events(path))
+
+
+def test_failing_body_tool_callback_is_logged(tmp_path):
+    def tools(engine):
+        engine.cb.on_body_tool("express", None)      # args.get on None raises
+    s, path = make_body_session(FakeEngine(on_start=tools), FakeAudio(), FakeHermes(), tmp_path, FakeBody())
+    asyncio.run(s.run())
+    assert any(e["event"] == "callback_error" and e["where"] == "on_body_tool" for e in events(path))

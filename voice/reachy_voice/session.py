@@ -7,6 +7,8 @@ import numpy as np
 
 from reachy_voice.activity import OutputActivity, UserSpeech
 from reachy_voice.audio import rms
+from reachy_voice.body import NullBody
+from reachy_voice.body_policy import CUES, EMOTIONS, ExpressionGate
 from reachy_voice.engines.base import Delegation, EngineCallbacks
 from reachy_voice.hermes import HermesError
 from reachy_voice.log import JsonlLog
@@ -14,6 +16,7 @@ from reachy_voice.persona import FALLBACK_REPLY
 from reachy_voice.policy import SessionPolicy
 
 RATE = 16000
+BODY_TEARDOWN_TIMEOUT_S = 15.0
 
 
 class EngineStartError(Exception):
@@ -22,7 +25,8 @@ class EngineStartError(Exception):
 
 class VoiceSession:
     def __init__(self, engine, audio, hermes, policy: SessionPolicy, speech_threshold: float, log: JsonlLog,
-                 session_id: str, clock=time.monotonic, tick_s: float = 0.25) -> None:
+                 session_id: str, clock=time.monotonic, tick_s: float = 0.25, *, body=None, gate=None,
+                 picker=None) -> None:
         self._engine, self._audio, self._hermes = engine, audio, hermes
         self._policy, self._log, self._session_id = policy, log, session_id
         self._clock, self._tick_s = clock, tick_s
@@ -32,6 +36,13 @@ class VoiceSession:
         self._tasks: set[asyncio.Task] = set()
         self._last_delivery: float | None = None
         self._closing = False
+        self._body = body or NullBody()
+        self._gate = gate or ExpressionGate()
+        self._picker = picker
+        self._body_tasks: set[asyncio.Task] = set()
+        self._was_speaking = False
+        self._utterance_started: float | None = None
+        self._utterance_text: list[str] = []
 
     async def run(self) -> str:
         opened = self._clock()
@@ -52,6 +63,18 @@ class VoiceSession:
                         self._log.write("mic_error", error=repr(mic.exception()))
                     return "mic_closed"
                 now = self._clock()
+                speaking = self._out.is_speaking(now)
+                if speaking != self._was_speaking:
+                    self._was_speaking = speaking
+                    if speaking:
+                        self._utterance_started = now  # keep text already received: it can precede the audio
+                        self._spawn_body(self._body.speaking(), "speaking")
+                    else:
+                        self._spawn_body(self._body.listening(), "listening")
+                        text = "".join(self._utterance_text).strip()
+                        self._utterance_started, self._utterance_text = None, []
+                        if self._picker is not None and text:
+                            self._spawn_body(self._pick_and_express(text), "pick")
                 last = max(opened, self._user.last_voice or opened, self._out.voiced_end,
                            self._last_delivery or opened)
                 pending_since = min(self._pending.values()) if self._pending else None
@@ -67,19 +90,76 @@ class VoiceSession:
             try:
                 await asyncio.gather(mic, engine_done, *self._tasks, return_exceptions=True)
             finally:
-                await self._engine.close()
+                try:
+                    await self._engine.close()
+                finally:
+                    await self._finish_body_tasks()
 
     def _callbacks(self) -> EngineCallbacks:
         name = self._engine.name
         return EngineCallbacks(
             on_audio=self._on_audio,
             on_user_text=lambda text: self._log.write("user_text", engine=name, text=text),
-            on_robot_text=lambda text: self._log.write("robot_text", engine=name, text=text),
+            on_robot_text=self._on_robot_text,
             on_interrupted=self._on_interrupted,
             on_delegation=self._on_delegation,
             on_usage=lambda usage: self._log.write("usage", engine=name, usage=usage),
+            on_body_tool=self._on_body_tool,
             on_error=lambda message: self._log.write("engine_error", engine=name, message=message),
         )
+
+    def _spawn_body(self, coro, what: str) -> None:
+        async def guarded():
+            try:
+                await coro
+            except Exception as exc:  # noqa: BLE001 - the body never breaks the voice
+                self._log.write("body_error", action=what, error=repr(exc))
+        task = asyncio.create_task(guarded())
+        self._body_tasks.add(task)
+        task.add_done_callback(self._body_tasks.discard)
+
+    async def _finish_body_tasks(self) -> None:
+        """Let in-flight motion finish, but never let a stuck body hang teardown."""
+        if not self._body_tasks:
+            return
+        try:
+            await asyncio.wait_for(asyncio.gather(*self._body_tasks, return_exceptions=True),
+                                   timeout=BODY_TEARDOWN_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            self._log.write("body_error", action="teardown_timeout", error="body tasks still running")
+
+    def _try_express(self, intent: str, source: str) -> None:
+        if intent not in EMOTIONS:
+            self._log.write("expression_dropped", intent=intent, source=source, reason="unknown")
+            return
+        if not self._gate.allow(self._clock(), self._user.last_voice, self._utterance_started):
+            self._log.write("expression_dropped", intent=intent, source=source, reason="gate")
+            return
+        self._log.write("expression", intent=intent, source=source)
+        self._spawn_body(self._body.express(intent), "express")
+
+    async def _pick_and_express(self, text: str) -> None:
+        intent = await self._picker.pick(text)
+        if intent:
+            self._try_express(intent, "picker")
+
+    def _on_robot_text(self, text: str) -> None:
+        try:
+            self._log.write("robot_text", engine=self._engine.name, text=text)
+            self._utterance_text.append(text)
+        except Exception as exc:  # noqa: BLE001
+            self._log.write("callback_error", where="on_robot_text", error=repr(exc))
+
+    def _on_body_tool(self, name: str, args: dict) -> None:
+        try:
+            if self._closing:
+                return
+            if name == "express":
+                self._try_express(str(args.get("emotion", "")), "model")
+            elif name == "look":
+                self._spawn_body(self._body.look(str(args.get("direction", "front"))), "look")
+        except Exception as exc:  # noqa: BLE001
+            self._log.write("callback_error", where="on_body_tool", error=repr(exc))
 
     async def _pump_mic(self) -> None:
         async for frame in self._audio.frames():
@@ -126,6 +206,7 @@ class VoiceSession:
         started = self._clock()
         self._pending[d.call_id] = started
         self._log.write("delegation", engine=self._engine.name, call_id=d.call_id, lane=d.lane, request=d.request)
+        self._try_express(CUES["handoff_start"], "cue")
         task = asyncio.create_task(self._handle_delegation(d, started))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -142,6 +223,7 @@ class VoiceSession:
         except Exception as exc:  # noqa: BLE001 - CancelledError is BaseException and still propagates
             ok, text = False, FALLBACK_REPLY
             self._log.write("delegation_error", call_id=d.call_id, error=repr(exc))
+        self._try_express(CUES["handoff_ok" if ok else "handoff_failed"], "cue")
         try:
             await self._engine.deliver(d.call_id, text)
         except Exception as exc:  # noqa: BLE001 - a failed delivery must not leave the session pending

@@ -38,9 +38,12 @@ class HermesClient:
         try:
             response = await self._client.post(f"{self._url}/v1/chat/completions", json=body, headers=headers, timeout=timeout)
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"].strip()
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            content = response.json()["choices"][0]["message"]["content"]
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
             raise HermesError(f"{type(exc).__name__}: {exc}") from exc
+        if not isinstance(content, str):
+            raise HermesError("empty or non-text reply from home agent")
+        return content.strip()
 
     async def aclose(self) -> None:
         await self._client.aclose()

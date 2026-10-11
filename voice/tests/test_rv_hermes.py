@@ -46,7 +46,11 @@ def test_task_lane_uses_gateway_default_model():
     assert seen["body"]["messages"][0]["content"].startswith("[Asked by unknown, via Reachy]")
 
 
-@pytest.mark.parametrize("response", [httpx.Response(500, text="boom"), httpx.Response(200, json={"oops": 1})])
+@pytest.mark.parametrize("response", [
+    httpx.Response(500, text="boom"),
+    httpx.Response(200, json={"oops": 1}),
+    httpx.Response(200, json={"choices": [{"message": {"content": None}}]}),
+])
 def test_bad_responses_raise_hermes_error(response):
     with pytest.raises(HermesError):
         asyncio.run(make(lambda r: response).ask("x", "a", "quick", "s"))

@@ -175,3 +175,22 @@ def test_body_tool_call_is_reported_and_answered_silently():
     r = session.tool_responses[0]
     assert r.id == "b1" and r.response == {"ok": True}
     assert r.scheduling == types.FunctionResponseScheduling.SILENT
+
+
+def test_body_persona_is_gemini_only():
+    from reachy_voice.persona import BODY_PERSONA_SUFFIX, PERSONA
+    assert "express" not in PERSONA
+    cfg = GeminiLiveEngine("m", "Kore", connect=FakeConnect(FakeSession([]))).config()
+    assert cfg.system_instruction.endswith(BODY_PERSONA_SUFFIX)
+
+
+def test_body_and_delegation_calls_in_one_message():
+    calls = [NS(id="b1", name="express", args={"emotion": "happy"}),
+             NS(id="c1", name="ask_home_agent", args={"request": "what's on the list"})]
+    session = FakeSession([[msg(tool_call=NS(function_calls=calls))]])
+    body_calls = []
+    got, cb = recorder()
+    cb.on_body_tool = lambda name, args: body_calls.append((name, args))
+    run(GeminiLiveEngine("m", "Kore", connect=FakeConnect(session)), cb)
+    assert body_calls == [("express", {"emotion": "happy"})]
+    assert [d.call_id for d in got["delegations"]] == ["c1"]

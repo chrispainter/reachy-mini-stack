@@ -9,7 +9,7 @@ from google.genai import types
 
 from reachy_voice.audio import StreamResampler, mic_to_pcm16
 from reachy_voice.engines.base import Delegation, EngineCallbacks
-from reachy_voice.persona import BODY_TOOLS, PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
+from reachy_voice.persona import BODY_PERSONA_SUFFIX, BODY_TOOLS, PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
 from reachy_voice.policy import choose_lane
 
 BODY_TOOL_NAMES = {t["name"] for t in BODY_TOOLS}
@@ -23,6 +23,7 @@ class GeminiLiveEngine:
         self._connect = connect or genai.Client(api_key=api_key).aio.live.connect
         self._resampler = StreamResampler(24000, 16000)
         self._calls: dict[str, str] = {}
+        self._ack_tasks: set[asyncio.Task] = set()
         self._cm = self._session = self._rx = None
         self._cb: EngineCallbacks | None = None
         self._closing = False
@@ -35,7 +36,7 @@ class GeminiLiveEngine:
                 language_code="en-US",
                 voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._voice)),
             ),
-            system_instruction=self._persona,
+            system_instruction=self._persona + BODY_PERSONA_SUFFIX,
             tools=[
                 types.Tool(
                     function_declarations=[
@@ -124,7 +125,9 @@ class GeminiLiveEngine:
             for fc in msg.tool_call.function_calls:
                 if fc.name in BODY_TOOL_NAMES:
                     cb.on_body_tool(fc.name, dict(fc.args or {}))
-                    asyncio.get_running_loop().create_task(self._ack_body_tool(fc.id, fc.name))
+                    task = asyncio.get_running_loop().create_task(self._ack_body_tool(fc.id, fc.name))
+                    self._ack_tasks.add(task)
+                    task.add_done_callback(self._ack_tasks.discard)
                     continue
                 args = dict(fc.args or {})
                 request = str(args.get("request", "")).strip()
@@ -145,6 +148,10 @@ class GeminiLiveEngine:
                     if self._cb is not None:
                         self._cb.on_error(f"gemini close failed: {exc!r}")
         finally:
+            pending = list(self._ack_tasks)
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
             if self._rx is not None:
                 self._rx.cancel()
                 await asyncio.gather(self._rx, return_exceptions=True)

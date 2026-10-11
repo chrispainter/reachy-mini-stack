@@ -12,9 +12,7 @@ to the home agent. When you do, say a brief acknowledgement straight away (for e
 let me check") and keep the conversation going. When the answer arrives, share it at a natural
 pause. Never invent the answer.
 Never send messages, buy or book anything, or share personal details without a clear spoken
-yes from the person.
-You have a small expressive body. Use the express tool now and then, at natural moments (a happy
-moment, thinking hard, saying yes), never on every reply. Use look only when it adds something."""
+yes from the person."""
 
 TOOL_NAME = "ask_home_agent"
 TOOL_DESCRIPTION = (
@@ -35,6 +33,10 @@ TOOL_PARAMS = {
 }
 
 FALLBACK_REPLY = "I couldn't reach the home agent just now. Want me to try again in a minute?"
+
+BODY_PERSONA_SUFFIX = """
+You have a small expressive body. Use the express tool now and then, at natural moments (a happy
+moment, thinking hard, saying yes), never on every reply. Use look only when it adds something."""
 
 BODY_TOOLS = [
     {

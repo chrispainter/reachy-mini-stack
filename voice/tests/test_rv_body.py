@@ -25,9 +25,9 @@ class FakeMini:
         if name in self.fail:
             raise RuntimeError(f"{name} failed")
 
-    def enable_motors(self): self._rec("enable_motors")
-    def disable_motors(self):
-        self._rec("disable_motors")
+    def enable_motors(self, ids=None): self._rec("enable_motors", ids=ids)
+    def disable_motors(self, ids=None):
+        self._rec("disable_motors", ids=ids)
         if getattr(self, "motors_fail_once", False) and names(self).count("disable_motors") == 1:
             raise RuntimeError("disable_motors failed once")
     def cancel_move(self): self._rec("cancel_move")
@@ -357,3 +357,46 @@ def test_wake_ends_with_antennas_perked(tmp_path):
     asyncio.run(body.wake(doa=None))
     last = [c for c in mini.calls if c[0] == "goto_target"][-1]
     assert last[2]["antennas"] == list(ANTENNA_LISTEN)
+
+
+ANTENNAS = ["left_antenna", "right_antenna"]
+
+
+def _idx(mini, name, **kw):
+    return next(i for i, c in enumerate(mini.calls) if c[0] == name and all(c[2].get(k) == v for k, v in kw.items()))
+
+
+def test_rest_ends_by_relaxing_antenna_torque(tmp_path):
+    mini = FakeMini()
+    body, _ = make(tmp_path, mini)
+    asyncio.run(body.rest())
+    assert mini.calls[-1] == ("disable_motors", (), {"ids": ANTENNAS})
+    assert names(mini)[-2] == "goto_target"
+
+
+def test_listening_and_speaking_re_enable_antenna_torque_first(tmp_path):
+    for fn in ("listening", "speaking"):
+        mini = FakeMini()
+        body, _ = make(tmp_path, mini)
+        asyncio.run(getattr(body, fn)())
+        assert mini.calls[0] == ("enable_motors", (), {"ids": ANTENNAS}), fn
+
+
+def test_express_re_enables_antenna_torque_before_the_move(tmp_path):
+    mini = FakeMini()
+    body, _ = make(tmp_path, mini)
+    assert asyncio.run(body.express("thinking")) is True
+    assert _idx(mini, "enable_motors", ids=ANTENNAS) < names(mini).index("async_play_move")
+
+
+def test_cancelled_sleep_still_attempts_motors_off(tmp_path):
+    mini = FakeMini()
+    mini.sleep_s = 1.5
+    body, _ = make(tmp_path, mini, step_timeout_s=0.4)
+
+    async def go():
+        await asyncio.wait_for(body.sleep(), 0.5)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(go())
+    assert "disable_motors" in names(mini)

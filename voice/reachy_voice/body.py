@@ -8,6 +8,7 @@ from reachy_voice.body_policy import doa_to_yaw
 from reachy_voice.log import JsonlLog
 
 LIBRARY = "pollen-robotics/reachy-mini-emotions-library"
+ANTENNA_IDS = ["left_antenna", "right_antenna"]
 _LOOK = {"left": (25, 0), "right": (-25, 0), "up": (0, -15), "down": (0, 15), "front": (0, 0)}
 
 
@@ -119,6 +120,7 @@ class Body:
             return
         self._mode = "listening"
         await self._run("listening", [
+            lambda: m.enable_motors(ids=list(ANTENNA_IDS)),
             lambda: m.start_head_tracking(weight=0.0),
             m.disable_wobbling,
             lambda: m.goto_target(antennas=list(ANTENNA_LISTEN), duration=0.3, body_yaw=None),
@@ -130,6 +132,7 @@ class Body:
             return
         self._mode = "speaking"
         await self._run("speaking", [
+            lambda: m.enable_motors(ids=list(ANTENNA_IDS)),
             lambda: m.goto_target(antennas=list(ANTENNA_REST), duration=0.3, body_yaw=None),
             lambda: m.start_head_tracking(weight=self._weight),
             self._enable_scaled_wobble,
@@ -178,6 +181,7 @@ class Body:
                 if not await self._idle():
                     return False
                 started = True
+                await self._step(lambda: m.enable_motors(ids=list(ANTENNA_IDS)))
                 await self._step(lambda: m.start_head_tracking(weight=0.0))
                 await self._step(m.disable_wobbling)
                 try:
@@ -214,6 +218,7 @@ class Body:
             m.stop_head_tracking,
             m.disable_wobbling,
             lambda: m.goto_target(head=self._pose(), antennas=list(ANTENNA_REST), duration=1.0, body_yaw=0.0),
+            lambda: m.disable_motors(ids=list(ANTENNA_IDS)),  # relaxed while awake-idle: a held servo dithers
         ])
 
     async def _force_motors_off(self) -> None:
@@ -239,8 +244,9 @@ class Body:
             self._log.write("body_event", action="sleep")
         except Exception as exc:  # noqa: BLE001
             self._log.write("body_error", action="sleep", error=repr(exc))
-        if not self._motors_off:
-            await self._force_motors_off()
+        finally:
+            if not self._motors_off:  # also on cancellation (caller timeout); _force_motors_off is self-bounded
+                await self._force_motors_off()
         return self._motors_off
 
     async def shutdown(self) -> None:

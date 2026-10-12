@@ -73,7 +73,7 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
                     if timer.should_sleep(now):
                         motors_off = False
                         try:
-                            motors_off = await asyncio.wait_for(body.sleep(), timeout=30)
+                            motors_off = await asyncio.wait_for(body.sleep(), timeout=45)
                         except asyncio.TimeoutError:
                             log.write("body_error", action="sleep_timeout")
                         timer.on_sleep()

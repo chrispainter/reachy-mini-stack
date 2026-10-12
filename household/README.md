@@ -91,6 +91,25 @@ only fetch CPU-only PyTorch from now on. To undo it, delete the file, then run
 
 Check usage with `ssh pollen@reachy-mini.local 'df -h /; du -sh /venvs/*'`.
 
+## Pi WiFi
+
+The Pi (a Pi 5) is on WiFi; its Ethernet port is unused. On the house mesh, its
+onboard WiFi stalled for up to 2 s every few seconds and sometimes dropped out
+for about a minute. During one dropout Hermes couldn't reach OpenAI and a Reachy
+task request failed with `ReadError`. The robot, on the same mesh node, was fine.
+Two settings fixed it on 2026-10-11, taking pings to the router from 131–222 ms
+average to 8 ms with no loss:
+
+- WiFi power saving off:
+  `sudo nmcli connection modify preconfigured 802-11-wireless.powersave 2`
+- The WiFi firmware's own access-point roaming off:
+  `/etc/modprobe.d/brcmfmac-roamoff.conf` contains
+  `options brcmfmac roamoff=1`, then reboot. To undo, delete the file and reboot.
+
+An Ethernet cable to the mesh node would remove the problem entirely. Check the
+link with `ssh behindtheproduct@reachy-pi.local 'ping -c 40 -i 0.25 -q 192.168.68.1'`;
+the average should be around 10 ms.
+
 ## Voice app
 
 Reachy's voice now comes from `voice/reachy_voice` (wake word, Gemini or OpenAI live voice, and a

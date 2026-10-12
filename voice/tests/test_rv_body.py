@@ -400,3 +400,14 @@ def test_cancelled_sleep_still_attempts_motors_off(tmp_path):
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(go())
     assert "disable_motors" in names(mini)
+
+
+def test_sleep_re_enables_antenna_torque_before_goto_sleep(tmp_path):
+    # rest() relaxes the antennas; without torque goto_sleep could not fold them down
+    mini = FakeMini()
+    body, _ = make(tmp_path, mini)
+    asyncio.run(body.rest())
+    start = len(mini.calls)
+    asyncio.run(body.sleep())
+    seq = [(n, kw.get("ids")) for n, _, kw in mini.calls[start:]]
+    assert seq.index(("enable_motors", ANTENNAS)) < seq.index(("goto_sleep", None))

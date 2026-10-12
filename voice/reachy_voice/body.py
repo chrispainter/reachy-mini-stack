@@ -236,6 +236,7 @@ class Body:
         self._motors_off = False
         try:
             async with self._lock:
+                await self._guarded("sleep_antennas_on", lambda: m.enable_motors(ids=list(ANTENNA_IDS)))
                 await self._guarded("sleep_stop_tracking", m.stop_head_tracking)
                 await self._guarded("sleep_disable_wobbling", m.disable_wobbling)
                 await self._guarded("sleep_goto_sleep", m.goto_sleep)

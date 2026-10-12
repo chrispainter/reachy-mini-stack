@@ -140,6 +140,13 @@ def test_make_engine_builds_each_engine():
         make_engine("alexa", s)
 
 
+def test_make_engine_propagates_body_enabled_to_gemini():
+    on = load_settings({"GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"})
+    off = load_settings({"GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o", "BODY_ENABLED": "false"})
+    assert {d.name for d in make_engine("gemini", on).config().tools[0].function_declarations} >= {"express", "look"}
+    assert {d.name for d in make_engine("gemini", off).config().tools[0].function_declarations} == {"ask_home_agent"}
+
+
 def test_close_never_raises_when_ws_close_fails():
     class BadWS(FakeWS):
         async def close(self):

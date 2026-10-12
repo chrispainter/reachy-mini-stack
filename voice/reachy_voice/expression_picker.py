@@ -13,7 +13,8 @@ _PROMPT = (
 
 class ExpressionPicker:
     def __init__(self, api_key: str, model: str = "gpt-5.4-nano", transport: httpx.AsyncBaseTransport | None = None,
-                 timeout_s: float = 3.0) -> None:
+                 timeout_s: float = 3.0, log=None) -> None:
+        self._log = log
         self._key, self._model = api_key, model
         self._client = httpx.AsyncClient(transport=transport, timeout=timeout_s)
 
@@ -31,7 +32,12 @@ class ExpressionPicker:
             )
             response.raise_for_status()
             word = str(response.json()["choices"][0]["message"]["content"]).strip().lower()
-        except Exception:  # noqa: BLE001 - an expression is optional; never fail the conversation
+        except Exception as exc:  # noqa: BLE001 - an expression is optional; never fail the conversation
+            if self._log is not None:
+                try:
+                    self._log.write("expression_pick_failed", error=type(exc).__name__)
+                except Exception:  # noqa: BLE001
+                    pass
             return None
         return word if word in EMOTIONS else None
 

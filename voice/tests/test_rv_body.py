@@ -26,7 +26,11 @@ class FakeMini:
             raise RuntimeError(f"{name} failed")
 
     def enable_motors(self): self._rec("enable_motors")
-    def disable_motors(self): self._rec("disable_motors")
+    def disable_motors(self):
+        self._rec("disable_motors")
+        if getattr(self, "motors_fail_once", False) and names(self).count("disable_motors") == 1:
+            raise RuntimeError("disable_motors failed once")
+    def cancel_move(self): self._rec("cancel_move")
     def wake_up(self): self._rec("wake_up")
     def goto_sleep(self):
         self._rec("goto_sleep")
@@ -39,6 +43,8 @@ class FakeMini:
 
     async def async_play_move(self, move, sound=True):
         self._rec("async_play_move", move, sound=sound)
+        if getattr(self, "hang_move", False):
+            await asyncio.sleep(60)
 
 
 class FakeLibrary:
@@ -306,3 +312,48 @@ def test_speaking_and_listening_are_noops_after_sleep(tmp_path):
     asyncio.run(body.wake(doa=None))
     asyncio.run(body.speaking())
     assert "enable_wobbling" in names(mini)
+
+
+def test_sleep_retries_motors_off_without_lock_and_returns_true(tmp_path):
+    mini = FakeMini()
+    mini.motors_fail_once = True
+    body, _ = make(tmp_path, mini)
+    assert asyncio.run(body.sleep()) is True
+    assert names(mini).count("disable_motors") == 2
+
+
+def test_sleep_busy_step_still_attempts_motors_off(tmp_path):
+    mini = FakeMini()
+    mini.sleep_s = 1.0
+    body, _ = make(tmp_path, mini, step_timeout_s=0.1)
+    assert asyncio.run(body.sleep()) is True
+    assert "disable_motors" in names(mini)
+
+
+def test_sleep_reports_false_when_motors_cannot_be_turned_off(tmp_path):
+    body, _ = make(tmp_path, FakeMini(fail={"disable_motors"}))
+    assert asyncio.run(body.sleep()) is False
+
+
+def test_express_move_that_never_finishes_times_out_and_cancels(tmp_path):
+    mini = FakeMini()
+    mini.hang_move = True
+    body, path = make(tmp_path, mini, move_timeout_s=0.1)
+
+    async def go():
+        start = time.monotonic()
+        ok = await body.express("thinking")
+        return ok, time.monotonic() - start
+
+    ok, took = asyncio.run(go())
+    assert ok is False and took < 2
+    assert "cancel_move" in names(mini)
+    assert any(e["event"] == "body_error" and e["action"] == "express_timeout" for e in events(path))
+
+
+def test_wake_ends_with_antennas_perked(tmp_path):
+    mini = FakeMini()
+    body, _ = make(tmp_path, mini)
+    asyncio.run(body.wake(doa=None))
+    last = [c for c in mini.calls if c[0] == "goto_target"][-1]
+    assert last[2]["antennas"] == list(ANTENNA_LISTEN)

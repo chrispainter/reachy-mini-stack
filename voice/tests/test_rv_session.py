@@ -362,7 +362,7 @@ def test_brief_playback_underrun_does_not_flap_body(tmp_path):
     s, _ = make_body_session(FakeEngine(on_start=speak), FakeAudio(), FakeHermes(), tmp_path, body, idle=0.6)
     asyncio.run(s.run())
     kinds = [c[0] for c in body.calls]
-    assert kinds.count("speaking") == 1 and kinds.count("listening") == 1
+    assert kinds == ["listening", "speaking", "listening"]  # initial perk, then one speaking cycle
 
 
 def test_default_gate_drops_model_expression_while_user_talks(tmp_path):
@@ -375,3 +375,10 @@ def test_default_gate_drops_model_expression_while_user_talks(tmp_path):
     assert asyncio.run(asyncio.wait_for(s.run(), 5)) == "max_duration"
     assert not [c for c in body.calls if c[0] == "express"]
     assert any(e["event"] == "expression_dropped" and e["reason"] == "gate" for e in events(tmp_path / "v.jsonl"))
+
+
+def test_session_start_perks_antennas_before_any_speaking(tmp_path):
+    body = FakeBody()
+    s, _ = make_body_session(FakeEngine(), FakeAudio(), FakeHermes(), tmp_path, body)
+    asyncio.run(s.run())
+    assert body.calls[0] == ("listening",)

@@ -52,7 +52,8 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
     body = Body(mini, log, tracking_weight=settings.tracking_weight) if settings.body_enabled else NullBody()
     timer = AwakeTimer(settings.idle_awake_s)
     gate = ExpressionGate(min_gap_s=settings.expression_min_gap_s)
-    picker = ExpressionPicker(settings.openai_api_key) if settings.openai_api_key else None
+    picker = (ExpressionPicker(settings.openai_api_key, log=log)
+              if settings.body_enabled and settings.openai_api_key else None)
     audio = RobotAudio(mini.media)
     audio.start()
     try:
@@ -70,9 +71,13 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
                 if now >= next_check:
                     next_check = now + 1.0
                     if timer.should_sleep(now):
-                        await body.sleep()
+                        motors_off = False
+                        try:
+                            motors_off = await asyncio.wait_for(body.sleep(), timeout=30)
+                        except asyncio.TimeoutError:
+                            log.write("body_error", action="sleep_timeout")
                         timer.on_sleep()
-                        log.write("body_sleep")
+                        log.write("body_sleep", motors_off=motors_off)
             doa = audio.doa(time.monotonic())
             audio.chime("wake")
             if not timer.awake:
@@ -91,13 +96,16 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
                     await asyncio.wait_for(body.express(CUES["session_end"]), timeout=10)
                 except asyncio.TimeoutError:
                     log.write("body_error", action="goodbye_timeout")
-            await body.rest()
+            try:
+                await asyncio.wait_for(body.rest(), timeout=30)
+            except asyncio.TimeoutError:
+                log.write("body_error", action="rest_timeout")
             timer.on_session_end(time.monotonic())
             wake.reset(time.monotonic())
     finally:
         cancelled = False
         try:
-            await asyncio.wait_for(body.shutdown(), timeout=10)
+            await asyncio.wait_for(body.shutdown(), timeout=20)
         except asyncio.CancelledError:
             cancelled = True
         except Exception as exc:  # noqa: BLE001

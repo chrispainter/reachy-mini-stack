@@ -18,8 +18,10 @@ BODY_TOOL_NAMES = {t["name"] for t in BODY_TOOLS}
 class GeminiLiveEngine:
     name = "gemini"
 
-    def __init__(self, model: str, voice: str, api_key: str = "", persona: str = PERSONA, connect=None) -> None:
+    def __init__(self, model: str, voice: str, api_key: str = "", persona: str = PERSONA, connect=None,
+                 body_tools: bool = True) -> None:
         self._model, self._voice, self._persona = model, voice, persona
+        self._body_tools = body_tools
         self._connect = connect or genai.Client(api_key=api_key).aio.live.connect
         self._resampler = StreamResampler(24000, 16000)
         self._calls: dict[str, str] = {}
@@ -36,7 +38,7 @@ class GeminiLiveEngine:
                 language_code="en-US",
                 voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._voice)),
             ),
-            system_instruction=self._persona + BODY_PERSONA_SUFFIX,
+            system_instruction=self._persona + (BODY_PERSONA_SUFFIX if self._body_tools else ""),
             tools=[
                 types.Tool(
                     function_declarations=[
@@ -53,7 +55,7 @@ class GeminiLiveEngine:
                                 parameters_json_schema=t["parameters"],
                                 behavior=types.Behavior.NON_BLOCKING,
                             )
-                            for t in BODY_TOOLS
+                            for t in (BODY_TOOLS if self._body_tools else ())
                         ),
                     ]
                 )

@@ -7,7 +7,8 @@ def make_engine(name: str, settings: Settings):
     if name == "gemini":
         from reachy_voice.engines.gemini import GeminiLiveEngine
 
-        return GeminiLiveEngine(settings.gemini_model, settings.gemini_voice, api_key=settings.gemini_api_key)
+        return GeminiLiveEngine(settings.gemini_model, settings.gemini_voice, api_key=settings.gemini_api_key,
+                                body_tools=settings.body_enabled)
     if name == "openai":
         from reachy_voice.engines.openai_live import OpenAILiveEngine
 

@@ -194,3 +194,10 @@ def test_body_and_delegation_calls_in_one_message():
     run(GeminiLiveEngine("m", "Kore", connect=FakeConnect(session)), cb)
     assert body_calls == [("express", {"emotion": "happy"})]
     assert [d.call_id for d in got["delegations"]] == ["c1"]
+
+
+def test_config_without_body_tools_is_plan2():
+    from reachy_voice.persona import BODY_PERSONA_SUFFIX
+    cfg = GeminiLiveEngine("m", "Kore", connect=FakeConnect(FakeSession([])), body_tools=False).config()
+    assert {d.name for d in cfg.tools[0].function_declarations} == {"ask_home_agent"}
+    assert BODY_PERSONA_SUFFIX not in cfg.system_instruction

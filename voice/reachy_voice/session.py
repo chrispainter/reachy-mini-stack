@@ -55,6 +55,7 @@ class VoiceSession:
         except Exception as exc:  # noqa: BLE001
             raise EngineStartError(repr(exc)) from exc
         self._log.write("session_open", engine=self._engine.name, session_id=self._session_id)
+        self._spawn_body(self._body.listening(), "listening")  # perk the antennas even if already awake
         mic = asyncio.create_task(self._pump_mic())
         engine_done = asyncio.create_task(self._engine.wait_closed())
         try:

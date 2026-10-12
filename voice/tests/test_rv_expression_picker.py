@@ -43,3 +43,14 @@ def test_errors_and_blank_text_give_none():
     calls = []
     assert asyncio.run(picker(lambda r: calls.append(1) or reply("happy")).pick("   ")) is None
     assert calls == []
+
+
+def test_failure_is_logged_without_secrets_and_gives_none():
+    events = []
+
+    class Log:
+        def write(self, event, **kw): events.append((event, kw))
+
+    p = ExpressionPicker("sk-secret", transport=httpx.MockTransport(lambda r: httpx.Response(401)), log=Log())
+    assert asyncio.run(p.pick("private words")) is None
+    assert events == [("expression_pick_failed", {"error": "HTTPStatusError"})]

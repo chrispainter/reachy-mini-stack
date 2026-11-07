@@ -1,4 +1,4 @@
-"""One persona and tool for both engines, so the bake-off compares engines only."""
+"""One persona and tool for every engine, so the bake-off compares engines only."""
 
 from reachy_voice.body_policy import EMOTIONS, LOOK_DIRECTIONS
 

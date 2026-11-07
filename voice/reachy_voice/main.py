@@ -33,7 +33,8 @@ async def _run_session(name: str, settings: Settings, audio: RobotAudio, hermes:
 async def _session_with_fallback(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient,
                                  log: JsonlLog, body=None, gate=None, picker=None) -> tuple[str, str]:
     """Run a session; returns (end reason, engine that actually ran)."""
-    candidates = [name] + ([other_engine(name)] if settings.has_engine(other_engine(name)) else [])
+    fallback = other_engine(name)
+    candidates = [name] + ([fallback] if fallback and settings.has_engine(fallback) else [])
     for engine in candidates:
         try:
             return await _run_session(engine, settings, audio, hermes, log, body, gate, picker), engine

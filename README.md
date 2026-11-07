@@ -40,6 +40,10 @@ run-clawbody.sh    Start ClawBody (Gradio web UI on :7860)
 ~/reachy-mini-stack/run-clawbody.sh                         # full OpenClaw bridge (needs gateway config)
 ```
 
+## Voice on the robot
+
+The household voice app is `voice/`. It runs on the Reachy Mini, next to `reachy-mini-daemon`, and does not open a listening port. Engines are Gemini, OpenAI, and Grok. Grok is `VOICE_ENGINE=grok` plus `XAI_API_KEY` in `~/reachy-voice/voice.env` on the robot. Versions, the config switch, and the physical-robot smoke test are in `voice/README.md`.
+
 ## OpenClaw bridge — to be wired up
 
 ClawBody expects the OpenClaw gateway at `OPENCLAW_GATEWAY_URL` (default port 18789). The user's OpenClaw runs on a Hostinger VPS at `openclaw.proxybrain.cloud`; its gateway is internal to the container. Two viable paths:

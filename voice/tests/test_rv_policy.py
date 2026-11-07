@@ -22,7 +22,9 @@ def test_engine_chooser_alternates_or_sticks():
     alt = EngineChooser("alternate")
     assert [alt.next() for _ in range(4)] == ["gemini", "openai", "gemini", "openai"]
     assert [EngineChooser("openai").next() for _ in range(2)] == ["openai", "openai"]
+    assert [EngineChooser("grok").next() for _ in range(2)] == ["grok", "grok"]
     assert other_engine("gemini") == "openai" and other_engine("openai") == "gemini"
+    assert other_engine("grok") is None
 
 
 def test_choose_lane():

@@ -22,8 +22,10 @@ class SessionPolicy:
         return None
 
 
-def other_engine(name: str) -> str:
-    return "openai" if name == "gemini" else "gemini"
+def other_engine(name: str) -> str | None:
+    """The bake-off partner for a failed start. Grok stays on Grok: a bad key must not
+    silently speak with another engine."""
+    return {"gemini": "openai", "openai": "gemini"}.get(name)
 
 
 class EngineChooser:

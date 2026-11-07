@@ -112,7 +112,7 @@ the average should be around 10 ms.
 
 ## Voice app
 
-Reachy's voice now comes from `voice/reachy_voice` (wake word, Gemini or OpenAI live voice, and a
+Reachy's voice now comes from `voice/reachy_voice` (wake word, Gemini, OpenAI, or Grok live voice, and a
 non-blocking Hermes hand-off), not from Pollen's conversation app. See `voice/README.md`. The
 `robot-profile/` and `robot-tools/` here belong to the older conversation-app setup and are kept
 as a fallback.

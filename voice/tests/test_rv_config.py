@@ -35,7 +35,27 @@ def test_missing_key_for_chosen_engine_is_rejected():
 
 def test_has_engine_reflects_keys():
     s = load_settings({"GEMINI_API_KEY": "g", "VOICE_ENGINE": "gemini"})
-    assert s.has_engine("gemini") and not s.has_engine("openai")
+    assert s.has_engine("gemini") and not s.has_engine("openai") and not s.has_engine("grok")
+
+
+def test_grok_engine_requires_only_the_xai_key():
+    s = load_settings({"VOICE_ENGINE": "grok", "XAI_API_KEY": "xai-secret"})
+    assert s.engine == "grok"
+    assert s.xai_model == "grok-voice-latest" and s.xai_voice == "eve"
+    assert s.xai_api_key == "xai-secret" and s.has_engine("grok")
+    assert not s.has_engine("gemini") and not s.has_engine("openai")
+    assert "xai-secret" not in repr(s)
+
+
+def test_grok_model_and_voice_overrides():
+    s = load_settings({"VOICE_ENGINE": " Grok ", "XAI_API_KEY": "k", "XAI_MODEL": "grok-voice-3.0",
+                       "XAI_VOICE": "ara"})
+    assert s.engine == "grok" and s.xai_model == "grok-voice-3.0" and s.xai_voice == "ara"
+
+
+def test_missing_xai_key_is_rejected():
+    with pytest.raises(ValueError, match="XAI_API_KEY"):
+        load_settings({"VOICE_ENGINE": "grok", "GEMINI_API_KEY": "g", "OPENAI_API_KEY": "o"})
 
 
 def test_repr_does_not_leak_keys():

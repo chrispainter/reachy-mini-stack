@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-ENGINES = ("gemini", "openai", "alternate")
+ENGINES = ("gemini", "openai", "grok", "alternate")
 
 
 @dataclass(frozen=True)
@@ -30,9 +30,13 @@ class Settings:
     tracking_weight: float = 0.6
     gemini_api_key: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)
+    xai_model: str = "grok-voice-latest"
+    xai_voice: str = "eve"
+    xai_api_key: str = field(default="", repr=False)
 
     def has_engine(self, name: str) -> bool:
-        return bool(self.gemini_api_key if name == "gemini" else self.openai_api_key if name == "openai" else False)
+        keys = {"gemini": self.gemini_api_key, "openai": self.openai_api_key, "grok": self.xai_api_key}
+        return bool(keys.get(name, ""))
 
 
 def load_settings(env: Mapping[str, str]) -> Settings:
@@ -79,11 +83,15 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         tracking_weight=number("TRACKING_WEIGHT", d.tracking_weight),
         gemini_api_key=text("GEMINI_API_KEY", ""),
         openai_api_key=text("OPENAI_API_KEY", ""),
+        xai_model=text("XAI_MODEL", d.xai_model),
+        xai_voice=text("XAI_VOICE", d.xai_voice),
+        xai_api_key=text("XAI_API_KEY", ""),
     )
     if s.engine not in ENGINES:
         raise ValueError(f"VOICE_ENGINE must be one of {ENGINES}, got {s.engine!r}")
-    needed = {"gemini": ["gemini"], "openai": ["openai"], "alternate": ["gemini", "openai"]}[s.engine]
-    missing = [f"{n.upper()}_API_KEY" for n in needed if not s.has_engine(n)]
+    key_env = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "grok": "XAI_API_KEY"}
+    needed = {"gemini": ["gemini"], "openai": ["openai"], "grok": ["grok"], "alternate": ["gemini", "openai"]}[s.engine]
+    missing = [key_env[n] for n in needed if not s.has_engine(n)]
     if missing:
         raise ValueError(f"missing required settings: {', '.join(missing)}")
     return s

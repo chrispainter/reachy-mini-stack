@@ -112,7 +112,12 @@ the average should be around 10 ms.
 
 ## Voice app
 
-Reachy's voice now comes from `voice/reachy_voice` (wake word, Gemini or OpenAI live voice, and a
+Reachy's voice now comes from `voice/reachy_voice` (wake word, Gemini, OpenAI, or Grok live voice, and a
 non-blocking Hermes hand-off), not from Pollen's conversation app. See `voice/README.md`. The
 `robot-profile/` and `robot-tools/` here belong to the older conversation-app setup and are kept
 as a fallback.
+
+Lists, notes and reminders still go to Hermes through `ask_home_agent`. With `PERSONA_NAME=kiko`
+and both Kiko URLs set, calendar, email, research, messages and tasks go to the household Grok Bot
+through `ask_kiko`. That path is outbound only. The relay workflow and the routine prompt are in
+`docs/kiko-relay.md`. Hermes is unchanged.

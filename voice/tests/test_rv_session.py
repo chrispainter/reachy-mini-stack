@@ -7,8 +7,9 @@ import pytest
 from reachy_voice.body_policy import ExpressionGate
 from reachy_voice.engines.base import Delegation
 from reachy_voice.hermes import HermesError
+from reachy_voice.kiko import KikoAuthError, KikoError, KikoTimeout
 from reachy_voice.log import JsonlLog
-from reachy_voice.persona import FALLBACK_REPLY
+from reachy_voice.persona import FALLBACK_REPLY, KIKO_FALLBACK_REPLY, KIKO_TIMEOUT_REPLY
 from reachy_voice.policy import SessionPolicy
 from reachy_voice.session import EngineStartError, VoiceSession
 
@@ -77,10 +78,23 @@ class FakeHermes:
         return self.answer
 
 
-def make(engine, audio, hermes, tmp_path, idle=0.1, pending=5.0, max_s=5.0):
+def make(engine, audio, hermes, tmp_path, idle=0.1, pending=5.0, max_s=5.0, kiko=None):
     log = JsonlLog(str(tmp_path / "v.jsonl"))
-    s = VoiceSession(engine, audio, hermes, SessionPolicy(idle, pending, max_s), 0.015, log, "sess-1", tick_s=0.01)
+    s = VoiceSession(engine, audio, hermes, SessionPolicy(idle, pending, max_s), 0.015, log, "sess-1", tick_s=0.01,
+                     kiko=kiko)
     return s, tmp_path / "v.jsonl"
+
+
+class FakeKiko:
+    def __init__(self, answer="You are free at three.", delay=0.0, fail=None):
+        self.answer, self.delay, self.fail, self.calls = answer, delay, fail, []
+
+    async def ask(self, request):
+        self.calls.append(request)
+        await asyncio.sleep(self.delay)
+        if self.fail:
+            raise self.fail
+        return self.answer
 
 
 def events(path):
@@ -382,3 +396,44 @@ def test_session_start_perks_antennas_before_any_speaking(tmp_path):
     s, _ = make_body_session(FakeEngine(), FakeAudio(), FakeHermes(), tmp_path, body)
     asyncio.run(s.run())
     assert body.calls[0] == ("listening",)
+
+
+def _kiko_delegate(engine):
+    engine.cb.on_delegation(Delegation("c9", "what's on my calendar today", "kiko", "kiko"))
+
+
+def test_kiko_handoff_holds_the_pending_window_then_speaks(tmp_path):
+    engine, hermes, kiko = FakeEngine(on_start=_kiko_delegate), FakeHermes(), FakeKiko(delay=0.3)
+    s, path = make(engine, FakeAudio(), hermes, tmp_path, idle=0.1, kiko=kiko)
+    reason, elapsed = asyncio.run(_timed(s))
+    assert reason == "idle" and elapsed >= 0.4
+    assert hermes.calls == []
+    assert kiko.calls == ["what's on my calendar today"]
+    assert engine.delivered == [("c9", "You are free at three.")]
+    result = [e for e in events(path) if e["event"] == "delegation_result"][0]
+    assert result["ok"] is True and result["target"] == "kiko"
+
+
+def test_kiko_timeout_says_it_will_follow_up(tmp_path):
+    engine = FakeEngine(on_start=_kiko_delegate)
+    s, path = make(engine, FakeAudio(), FakeHermes(), tmp_path, kiko=FakeKiko(fail=KikoTimeout("slow")))
+    asyncio.run(s.run())
+    assert engine.delivered == [("c9", KIKO_TIMEOUT_REPLY)]
+    err = [e for e in events(path) if e["event"] == "delegation_error"][0]
+    assert err["error"] == "timeout"
+
+
+def test_kiko_auth_failure_logs_auth_and_says_follow_up(tmp_path):
+    engine = FakeEngine(on_start=_kiko_delegate)
+    s, path = make(engine, FakeAudio(), FakeHermes(), tmp_path, kiko=FakeKiko(fail=KikoAuthError("auth")))
+    asyncio.run(s.run())
+    assert engine.delivered == [("c9", KIKO_TIMEOUT_REPLY)]
+    err = [e for e in events(path) if e["event"] == "delegation_error"][0]
+    assert err["error"] == "auth"
+
+
+def test_kiko_failure_uses_the_kiko_fallback(tmp_path):
+    engine = FakeEngine(on_start=_kiko_delegate)
+    s, _ = make(engine, FakeAudio(), FakeHermes(), tmp_path, kiko=FakeKiko(fail=KikoError("webhook rejected the call (401)")))
+    asyncio.run(s.run())
+    assert engine.delivered == [("c9", KIKO_FALLBACK_REPLY)]

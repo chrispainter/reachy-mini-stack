@@ -22,8 +22,10 @@ class SessionPolicy:
         return None
 
 
-def other_engine(name: str) -> str:
-    return "openai" if name == "gemini" else "gemini"
+def other_engine(name: str) -> str | None:
+    """The bake-off partner for a failed start. Grok stays on Grok: a bad key must not
+    silently speak with another engine."""
+    return {"gemini": "openai", "openai": "gemini"}.get(name)
 
 
 class EngineChooser:
@@ -41,3 +43,28 @@ class EngineChooser:
 def choose_lane(request: str) -> str:
     """Quick lane for household list/note lookups and edits; everything else is a task."""
     return "quick" if _QUICK.search(request or "") else "task"
+
+
+# OpenAI has one delegation channel and no tool name. "what's on" is in the quick
+# regex, so a calendar question has to be recognised before that rule.
+_KIKO_WORK = re.compile(
+    r"\b(calendar|schedule|scheduling|meeting|meetings|email|e-mail|inbox|research|message|messages|task|tasks)\b",
+    re.IGNORECASE,
+)
+_LIST_WORK = re.compile(r"\b(list|lists|note|notes|grocer\w*|shopping)\b", re.IGNORECASE)
+
+
+def route_delegation(request: str, *, kiko_enabled: bool) -> tuple[str, str]:
+    """(lane, target) for a delegation that did not name a tool.
+
+    Gemini and Grok name ask_home_agent or ask_kiko. OpenAI does not. Lists and
+    notes stay with Hermes. Other delegated work goes to Kiko when configured.
+    """
+    if not kiko_enabled:
+        return choose_lane(request), "hermes"
+    text = request or ""
+    if _KIKO_WORK.search(text):
+        return "kiko", "kiko"
+    if _LIST_WORK.search(text) or choose_lane(text) == "quick":
+        return "quick", "hermes"
+    return "kiko", "kiko"

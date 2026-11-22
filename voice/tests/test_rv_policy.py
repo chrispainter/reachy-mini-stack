@@ -1,4 +1,4 @@
-from reachy_voice.policy import EngineChooser, SessionPolicy, choose_lane, other_engine
+from reachy_voice.policy import EngineChooser, SessionPolicy, choose_lane, other_engine, route_delegation
 
 
 def test_idle_close_after_quiet():
@@ -22,7 +22,9 @@ def test_engine_chooser_alternates_or_sticks():
     alt = EngineChooser("alternate")
     assert [alt.next() for _ in range(4)] == ["gemini", "openai", "gemini", "openai"]
     assert [EngineChooser("openai").next() for _ in range(2)] == ["openai", "openai"]
+    assert [EngineChooser("grok").next() for _ in range(2)] == ["grok", "grok"]
     assert other_engine("gemini") == "openai" and other_engine("openai") == "gemini"
+    assert other_engine("grok") is None
 
 
 def test_choose_lane():
@@ -30,3 +32,12 @@ def test_choose_lane():
     assert choose_lane("add bread to the shopping list") == "quick"
     assert choose_lane("Plan a weekend trip to the coast with the kids") == "task"
     assert choose_lane("") == "task"
+
+
+def test_route_delegation_sends_calendar_to_kiko_and_lists_to_hermes():
+    assert route_delegation("what's on the grocery list", kiko_enabled=False) == ("quick", "hermes")
+    assert route_delegation("what's on my calendar today", kiko_enabled=True) == ("kiko", "kiko")
+    assert route_delegation("what's on the grocery list", kiko_enabled=True) == ("quick", "hermes")
+    assert route_delegation("add bread", kiko_enabled=True) == ("quick", "hermes")
+    assert route_delegation("Plan a weekend trip", kiko_enabled=True) == ("kiko", "kiko")
+    assert route_delegation("check my email", kiko_enabled=True) == ("kiko", "kiko")

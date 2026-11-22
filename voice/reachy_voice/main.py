@@ -14,6 +14,7 @@ from reachy_voice.config import Settings, load_settings
 from reachy_voice.engines import make_engine
 from reachy_voice.expression_picker import ExpressionPicker
 from reachy_voice.hermes import HermesClient
+from reachy_voice.kiko import KikoClient, bounded_timeout
 from reachy_voice.log import JsonlLog
 from reachy_voice.policy import EngineChooser, SessionPolicy, other_engine
 from reachy_voice.robot_audio import RobotAudio
@@ -22,21 +23,22 @@ from reachy_voice.wake import WakeWord, load_wake_model
 
 
 async def _run_session(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient, log: JsonlLog,
-                       body=None, gate=None, picker=None) -> str:
+                       body=None, gate=None, picker=None, kiko=None) -> str:
     policy = SessionPolicy(settings.idle_timeout_s, settings.pending_max_s, settings.max_session_s)
     session = VoiceSession(make_engine(name, settings), audio, hermes, policy, settings.speech_threshold, log,
                            session_id=f"reachy-{name}-{int(time.time())}", body=body, gate=gate,
-                           picker=picker if name == "openai" else None)
+                           picker=picker if name == "openai" else None, kiko=kiko)
     return await session.run()
 
 
 async def _session_with_fallback(name: str, settings: Settings, audio: RobotAudio, hermes: HermesClient,
-                                 log: JsonlLog, body=None, gate=None, picker=None) -> tuple[str, str]:
+                                 log: JsonlLog, body=None, gate=None, picker=None, kiko=None) -> tuple[str, str]:
     """Run a session; returns (end reason, engine that actually ran)."""
-    candidates = [name] + ([other_engine(name)] if settings.has_engine(other_engine(name)) else [])
+    fallback = other_engine(name)
+    candidates = [name] + ([fallback] if fallback and settings.has_engine(fallback) else [])
     for engine in candidates:
         try:
-            return await _run_session(engine, settings, audio, hermes, log, body, gate, picker), engine
+            return await _run_session(engine, settings, audio, hermes, log, body, gate, picker, kiko), engine
         except EngineStartError as exc:  # only a failure to start falls back to the other engine
             log.write("session_error", engine=engine, error=repr(exc), phase="start")
         except Exception as exc:  # noqa: BLE001 - mid-session failure: end the session, no engine swap
@@ -47,7 +49,8 @@ async def _session_with_fallback(name: str, settings: Settings, audio: RobotAudi
     return "error", name
 
 
-async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: JsonlLog, pruned_logs: int = 0) -> None:
+async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: JsonlLog, pruned_logs: int = 0,
+                       kiko=None) -> None:
     chooser = EngineChooser(settings.engine)
     body = Body(mini, log, tracking_weight=settings.tracking_weight) if settings.body_enabled else NullBody()
     timer = AwakeTimer(settings.idle_awake_s)
@@ -60,7 +63,7 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
         await body.shutdown()  # start asleep with motors off, however the robot was left
         wake = WakeWord(load_wake_model(settings.wake_model), settings.wake_threshold)
         log.write("ready", engine_mode=settings.engine, wake_model=settings.wake_model, pruned_logs=pruned_logs,
-                  body_enabled=settings.body_enabled)
+                  body_enabled=settings.body_enabled, persona=settings.persona_name, kiko_enabled=settings.kiko_enabled)
         while True:
             next_check = time.monotonic() + 1.0
             async for frame in audio.frames():
@@ -88,7 +91,8 @@ async def _listen_loop(mini, settings: Settings, hermes: HermesClient, log: Json
                 timer.on_wake(time.monotonic())
             name = chooser.next()
             log.write("wake", engine=name, doa=doa)
-            reason, engine_used = await _session_with_fallback(name, settings, audio, hermes, log, body, gate, picker)
+            reason, engine_used = await _session_with_fallback(
+                name, settings, audio, hermes, log, body, gate, picker, kiko)
             log.write("session_end", engine=engine_used, reason=reason)
             audio.chime("sleep")
             if reason != "error" and gate.allow(time.monotonic(), None, None):
@@ -140,21 +144,41 @@ def prune_old_logs(log_dir: str, now: float, max_age_s: float = LOG_RETENTION_S)
     return removed
 
 
+def make_kiko(settings: Settings) -> KikoClient | None:
+    if not settings.kiko_enabled:
+        return None
+    return KikoClient(
+        webhook_url=settings.kiko_webhook_url,
+        webhook_key=settings.kiko_webhook_key,
+        webhook_auth_header=settings.kiko_webhook_auth_header,
+        result_url=settings.kiko_result_url,
+        result_key=settings.kiko_result_key,
+        result_auth_header=settings.kiko_result_auth_header,
+        timeout_s=bounded_timeout(settings.kiko_timeout_s, settings.pending_max_s),
+        max_words=settings.kiko_max_words,
+    )
+
+
 async def amain(settings: Settings) -> None:
     pruned_logs = prune_old_logs(settings.log_dir, time.time())
     log = JsonlLog(os.path.join(settings.log_dir, f"voice-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"))
     hermes = HermesClient(settings.home_agent_url, settings.home_agent_key, settings.quick_model, settings.quick_provider)
+    kiko = make_kiko(settings)
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, task.cancel)
     try:
         with ReachyMini() as mini:
-            await _listen_loop(mini, settings, hermes, log, pruned_logs)
+            await _listen_loop(mini, settings, hermes, log, pruned_logs, kiko)
     except asyncio.CancelledError:
         log.write("shutdown")  # SIGTERM/SIGINT: a normal exit
     finally:
-        await hermes.aclose()
+        try:
+            await hermes.aclose()
+        finally:
+            if kiko is not None:
+                await kiko.aclose()
 
 
 def main() -> None:

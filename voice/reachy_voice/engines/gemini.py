@@ -9,7 +9,7 @@ from google.genai import types
 
 from reachy_voice.audio import StreamResampler, mic_to_pcm16
 from reachy_voice.engines.base import Delegation, EngineCallbacks
-from reachy_voice.persona import BODY_PERSONA_SUFFIX, BODY_TOOLS, PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
+from reachy_voice.persona import BODY_TOOLS, KIKO_TOOL_NAME, PERSONA, TOOL_NAME, function_tools, instructions
 from reachy_voice.policy import choose_lane
 
 BODY_TOOL_NAMES = {t["name"] for t in BODY_TOOLS}
@@ -19,9 +19,10 @@ class GeminiLiveEngine:
     name = "gemini"
 
     def __init__(self, model: str, voice: str, api_key: str = "", persona: str = PERSONA, connect=None,
-                 body_tools: bool = True) -> None:
+                 body_tools: bool = True, kiko_tool: bool = False) -> None:
         self._model, self._voice, self._persona = model, voice, persona
         self._body_tools = body_tools
+        self._kiko_tool = kiko_tool
         self._connect = connect or genai.Client(api_key=api_key).aio.live.connect
         self._resampler = StreamResampler(24000, 16000)
         self._calls: dict[str, str] = {}
@@ -38,25 +39,19 @@ class GeminiLiveEngine:
                 language_code="en-US",
                 voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self._voice)),
             ),
-            system_instruction=self._persona + (BODY_PERSONA_SUFFIX if self._body_tools else ""),
+            system_instruction=instructions(self._persona, body_tools=self._body_tools, kiko_tool=self._kiko_tool),
             tools=[
                 types.Tool(
                     function_declarations=[
                         types.FunctionDeclaration(
-                            name=TOOL_NAME,
-                            description=TOOL_DESCRIPTION,
-                            parameters_json_schema=TOOL_PARAMS,
+                            name=tool["name"],
+                            description=tool["description"],
+                            parameters_json_schema=tool["parameters"],
                             behavior=types.Behavior.NON_BLOCKING,  # explicit; the default was never verified
-                        ),
-                        *(
-                            types.FunctionDeclaration(
-                                name=t["name"],
-                                description=t["description"],
-                                parameters_json_schema=t["parameters"],
-                                behavior=types.Behavior.NON_BLOCKING,
-                            )
-                            for t in (BODY_TOOLS if self._body_tools else ())
-                        ),
+                        )
+                        for tool in (
+                            function_tools(kiko=self._kiko_tool) + (BODY_TOOLS if self._body_tools else [])
+                        )
                     ]
                 )
             ],
@@ -133,8 +128,11 @@ class GeminiLiveEngine:
                     continue
                 args = dict(fc.args or {})
                 request = str(args.get("request", "")).strip()
-                lane = args.get("lane") if args.get("lane") in ("quick", "task") else choose_lane(request)
                 self._calls[fc.id] = fc.name
+                if fc.name == KIKO_TOOL_NAME and self._kiko_tool:
+                    cb.on_delegation(Delegation(call_id=fc.id, request=request, lane="kiko", target="kiko"))
+                    continue
+                lane = args.get("lane") if args.get("lane") in ("quick", "task") else choose_lane(request)
                 cb.on_delegation(Delegation(call_id=fc.id, request=request, lane=lane))
         if msg.usage_metadata:
             cb.on_usage({"total_tokens": msg.usage_metadata.total_token_count})

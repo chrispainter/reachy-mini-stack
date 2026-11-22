@@ -29,9 +29,16 @@ set -euo pipefail
 cd ~/reachy-voice
 APP_ENV=/venvs/apps_venv/lib/python3.12/site-packages/reachy_mini_conversation_app/.env
 umask 077
-# Keys never leave the robot: copy the four needed lines, keep any local VOICE_* overrides.
-{ grep -E '^(GEMINI_API_KEY|OPENAI_API_KEY|HOME_AGENT_URL|HOME_AGENT_KEY)=' "$APP_ENV"
-  [ -f voice.env ] && grep -vE '^(GEMINI_API_KEY|OPENAI_API_KEY|HOME_AGENT_URL|HOME_AGENT_KEY)=' voice.env || true
+# Keys never leave the robot. A line in the conversation-app .env wins; otherwise the
+# existing voice.env line is kept. PERSONA_* and KIKO_* (including KIKO_MAX_WORDS) follow
+# that rule when the line is present. Values are not printed.
+CARRY='^(GEMINI_API_KEY|OPENAI_API_KEY|XAI_API_KEY|HOME_AGENT_URL|HOME_AGENT_KEY|PERSONA_NAME|PERSONA_FILE|KIKO_MAX_WORDS|KIKO_[A-Z0-9_]+)='
+# Only names actually present in the app .env are replaced; every other voice.env line stays.
+APP_KEYS=$(grep -E "$CARRY" "$APP_ENV" | cut -d= -f1 | sort -u | paste -sd'|' - || true)
+{ grep -E "$CARRY" "$APP_ENV" || true
+  if [ -f voice.env ]; then
+    if [ -n "$APP_KEYS" ]; then grep -vE "^($APP_KEYS)=" voice.env || true; else cat voice.env; fi
+  fi
 } > voice.env.new
 grep -q '^VOICE_ENGINE=' voice.env.new || echo 'VOICE_ENGINE=alternate' >> voice.env.new
 grep -q '^VOICE_LOG_DIR=' voice.env.new || echo 'VOICE_LOG_DIR=/home/pollen/reachy-voice/logs' >> voice.env.new

@@ -229,6 +229,30 @@ def test_server_hangup_ends_wait_closed():
     assert ws.closed
 
 
+def test_ask_kiko_delegates_to_kiko_and_is_absent_unless_enabled():
+    ws = FakeWS([
+        {"type": "session.updated"},
+        {"type": "response.function_call_arguments.done", "name": "ask_kiko", "call_id": "k1",
+         "arguments": json.dumps({"request": "what's on my calendar today"})},
+    ])
+    engine = GrokLiveEngine("grok-voice-latest", "eve", connect=connect_to(ws), kiko_tool=True)
+    got, cb = recorder()
+
+    async def go():
+        await engine.start(cb)
+        await until(lambda: bool(got["delegations"]))
+        await engine.close()
+    asyncio.run(go())
+
+    delegation = got["delegations"][0]
+    assert (delegation.call_id, delegation.request, delegation.lane, delegation.target) == (
+        "k1", "what's on my calendar today", "kiko", "kiko")
+    offered = [tool["name"] for tool in engine.session_update()["session"]["tools"]]
+    assert offered[:2] == ["ask_home_agent", "ask_kiko"]
+    plain = GrokLiveEngine("grok-voice-latest", "eve", connect=connect_to(FakeWS([])))
+    assert "ask_kiko" not in [tool["name"] for tool in plain.session_update()["session"]["tools"]]
+
+
 def test_make_engine_builds_grok_from_settings():
     on = load_settings({"XAI_API_KEY": "x", "VOICE_ENGINE": "grok"})
     off = load_settings({"XAI_API_KEY": "x", "VOICE_ENGINE": "grok", "BODY_ENABLED": "false"})

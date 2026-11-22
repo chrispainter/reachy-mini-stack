@@ -3,7 +3,10 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from reachy_voice.persona import load_persona
+
 ENGINES = ("gemini", "openai", "grok", "alternate")
+DEFAULT_KIKO_AUTH_HEADER = "Authorization: Bearer <key>"
 
 
 @dataclass(frozen=True)
@@ -33,10 +36,24 @@ class Settings:
     xai_model: str = "grok-voice-latest"
     xai_voice: str = "eve"
     xai_api_key: str = field(default="", repr=False)
+    persona_name: str = "reachy"
+    persona_file: str = ""
+    kiko_webhook_url: str = ""
+    kiko_webhook_key: str = field(default="", repr=False)
+    kiko_webhook_auth_header: str = DEFAULT_KIKO_AUTH_HEADER
+    kiko_result_url: str = ""
+    kiko_result_key: str = field(default="", repr=False)
+    kiko_result_auth_header: str = DEFAULT_KIKO_AUTH_HEADER
+    kiko_timeout_s: float = 180.0
 
     def has_engine(self, name: str) -> bool:
         keys = {"gemini": self.gemini_api_key, "openai": self.openai_api_key, "grok": self.xai_api_key}
         return bool(keys.get(name, ""))
+
+    @property
+    def kiko_enabled(self) -> bool:
+        """ask_kiko is offered only when both the webhook and the result mailbox are set."""
+        return bool(self.kiko_webhook_url and self.kiko_result_url)
 
 
 def load_settings(env: Mapping[str, str]) -> Settings:
@@ -86,7 +103,19 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         xai_model=text("XAI_MODEL", d.xai_model),
         xai_voice=text("XAI_VOICE", d.xai_voice),
         xai_api_key=text("XAI_API_KEY", ""),
+        persona_name=text("PERSONA_NAME", d.persona_name).lower(),
+        persona_file=text("PERSONA_FILE", d.persona_file),
+        kiko_webhook_url=text("KIKO_WEBHOOK_URL", d.kiko_webhook_url),
+        kiko_webhook_key=text("KIKO_WEBHOOK_KEY", ""),
+        kiko_webhook_auth_header=text("KIKO_WEBHOOK_AUTH_HEADER", d.kiko_webhook_auth_header),
+        kiko_result_url=text("KIKO_RESULT_URL", d.kiko_result_url),
+        kiko_result_key=text("KIKO_RESULT_KEY", ""),
+        kiko_result_auth_header=text("KIKO_RESULT_AUTH_HEADER", d.kiko_result_auth_header),
+        kiko_timeout_s=number("KIKO_TIMEOUT_S", d.kiko_timeout_s),
     )
+    if s.kiko_timeout_s <= 0:
+        raise ValueError("KIKO_TIMEOUT_S must be positive")
+    load_persona(s.persona_name, s.persona_file)
     if s.engine not in ENGINES:
         raise ValueError(f"VOICE_ENGINE must be one of {ENGINES}, got {s.engine!r}")
     key_env = {"gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY", "grok": "XAI_API_KEY"}

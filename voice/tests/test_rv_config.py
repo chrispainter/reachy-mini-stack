@@ -59,9 +59,12 @@ def test_missing_xai_key_is_rejected():
 
 
 def test_repr_does_not_leak_keys():
-    s = load_settings({"GEMINI_API_KEY": "gem-secret", "OPENAI_API_KEY": "oai-secret", "HOME_AGENT_KEY": "home-secret"})
+    s = load_settings({"GEMINI_API_KEY": "gem-secret", "OPENAI_API_KEY": "oai-secret", "HOME_AGENT_KEY": "home-secret",
+                       "KIKO_WEBHOOK_KEY": "hook-secret", "KIKO_RESULT_KEY": "box-secret",
+                       "KIKO_WEBHOOK_URL": "https://example.test/hook", "KIKO_RESULT_URL": "https://example.test/box"})
     text = repr(s)
     assert "gem-secret" not in text and "oai-secret" not in text and "home-secret" not in text
+    assert "hook-secret" not in text and "box-secret" not in text
 
 
 def test_body_settings_defaults_and_overrides():

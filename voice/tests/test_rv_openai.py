@@ -198,6 +198,33 @@ def test_close_cancelled_during_wait_still_shuts_down():
     assert ws.closed
 
 
+def test_kiko_routes_calendar_away_from_lists():
+    def drive(delta, kiko_tool):
+        ws = FakeWS([
+            {"type": "session.started"},
+            {"type": "session.input_transcript.delta", "delta": delta},
+            {"type": "session.delegation.created", "delegation": {"id": "item_9"}},
+            {"type": "error", "error": {"message": "stop"}},
+        ])
+        engine = OpenAILiveEngine("gpt-live-1", "marin", connect=connect_to(ws), kiko_tool=kiko_tool)
+        got, cb = recorder()
+
+        async def go():
+            await engine.start(cb)
+            while not got["errors"]:
+                await asyncio.sleep(0.01)
+            await engine.close()
+        asyncio.run(go())
+        return got["delegations"][0]
+
+    calendar = drive("what's on my calendar today", True)
+    assert (calendar.lane, calendar.target) == ("kiko", "kiko")
+    grocery = drive(" what's on the grocery list", True)
+    assert (grocery.lane, grocery.target) == ("quick", "hermes")
+    assert "ask_kiko" in OpenAILiveEngine("gpt-live-1", "marin", kiko_tool=True)._persona
+    assert "ask_kiko" not in OpenAILiveEngine("gpt-live-1", "marin")._persona
+
+
 def test_connect_failure_propagates_and_wait_closed_returns():
     async def connect():
         raise ConnectionError("nope")

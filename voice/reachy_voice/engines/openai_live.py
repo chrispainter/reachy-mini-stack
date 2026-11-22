@@ -11,8 +11,8 @@ import websockets
 
 from reachy_voice.audio import mic_to_pcm16, pcm16_to_float
 from reachy_voice.engines.base import Delegation, EngineCallbacks
-from reachy_voice.persona import PERSONA
-from reachy_voice.policy import choose_lane
+from reachy_voice.persona import PERSONA, instructions
+from reachy_voice.policy import route_delegation
 from reachy_voice.segment import TurnSegmenter
 
 URL = "wss://api.openai.com/v1/live/sessions"
@@ -21,8 +21,11 @@ URL = "wss://api.openai.com/v1/live/sessions"
 class OpenAILiveEngine:
     name = "openai"
 
-    def __init__(self, model: str, voice: str, api_key: str = "", persona: str = PERSONA, connect=None) -> None:
-        self._model, self._voice, self._persona = model, voice, persona
+    def __init__(self, model: str, voice: str, api_key: str = "", persona: str = PERSONA, connect=None,
+                 kiko_tool: bool = False) -> None:
+        self._model, self._voice = model, voice
+        self._persona = instructions(persona, body_tools=False, kiko_tool=kiko_tool)
+        self._kiko_tool = kiko_tool
         self._connect = connect or (
             lambda: websockets.connect(URL, additional_headers={"Authorization": f"Bearer {api_key}"}, max_size=None)
         )
@@ -102,7 +105,8 @@ class OpenAILiveEngine:
             cb.on_robot_text(event.get("delta", ""))
         elif kind == "session.delegation.created":
             request = self._segmenter.request()
-            cb.on_delegation(Delegation(call_id=event["delegation"]["id"], request=request, lane=choose_lane(request)))
+            lane, target = route_delegation(request, kiko_enabled=self._kiko_tool)
+            cb.on_delegation(Delegation(call_id=event["delegation"]["id"], request=request, lane=lane, target=target))
         elif kind == "session.usage.updated":
             cb.on_usage(event.get("usage") or {})
         elif kind == "error":

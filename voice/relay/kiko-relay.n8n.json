@@ -1,0 +1,165 @@
+{
+  "name": "Kiko result relay (leave inactive)",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kiko-result",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c1a0b1d0-0001-4000-8000-000000000001",
+      "name": "POST kiko-result",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        220
+      ],
+      "webhookId": "kiko-result-post",
+      "notes": "Inactive until the owner activates this workflow. Auth is the Authorization header checked in the next node against an n8n env var. No secret is stored in this file.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const TTL_MS = 10 * 60 * 1000;\nconst item = $input.first().json;\nconst headers = item.headers || {};\nconst store = $getWorkflowStaticData('global');\nif (!store.jobs || typeof store.jobs !== 'object') store.jobs = {};\nconst now = Date.now();\nfor (const id of Object.keys(store.jobs)) {\n  if (!store.jobs[id] || now - Number(store.jobs[id].at || 0) > TTL_MS) delete store.jobs[id];\n}\nfunction header(name) {\n  const want = name.toLowerCase();\n  for (const key of Object.keys(headers)) {\n    if (String(key).toLowerCase() === want) {\n      const value = headers[key];\n      return Array.isArray(value) ? String(value[0] || '') : String(value == null ? '' : value);\n    }\n  }\n  return '';\n}\nfunction same(got, expected) {\n  if (!expected || got.length !== expected.length) return false;\n  let diff = 0;\n  for (let i = 0; i < expected.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);\n  return diff === 0;\n}\nconst secret = String($env.KIKO_RELAY_POST_KEY || '');\nif (!same(header('authorization'), secret ? ('Bearer ' + secret) : '')) {\n  return [{ json: { statusCode: 401, responseBody: { error: 'unauthorized' } } }];\n}\nconst body = item.body && typeof item.body === 'object' ? item.body : {};\nconst jobId = String(body.job_id || '').trim();\nconst speech = typeof body.speech === 'string' ? body.speech.trim() : '';\nif (!jobId || !speech) {\n  return [{ json: { statusCode: 400, responseBody: { error: 'job_id and speech required' } } }];\n}\nif (speech.length > 2000) {\n  return [{ json: { statusCode: 413, responseBody: { error: 'speech too long' } } }];\n}\nstore.jobs[jobId] = { speech: speech, at: now };\nreturn [{ json: { statusCode: 200, responseBody: { ok: true } } }];"
+      },
+      "id": "c1a0b1d0-0001-4000-8000-000000000002",
+      "name": "Store speech",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.responseBody }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "c1a0b1d0-0001-4000-8000-000000000003",
+      "name": "Reply to POST",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        820,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "kiko-result",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c1a0b1d0-0001-4000-8000-000000000004",
+      "name": "GET kiko-result",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        480
+      ],
+      "webhookId": "kiko-result-get",
+      "notes": "Inactive until the owner activates this workflow. Auth is the Authorization header checked in the next node against an n8n env var. No secret is stored in this file.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const TTL_MS = 10 * 60 * 1000;\nconst item = $input.first().json;\nconst headers = item.headers || {};\nconst store = $getWorkflowStaticData('global');\nif (!store.jobs || typeof store.jobs !== 'object') store.jobs = {};\nconst now = Date.now();\nfor (const id of Object.keys(store.jobs)) {\n  if (!store.jobs[id] || now - Number(store.jobs[id].at || 0) > TTL_MS) delete store.jobs[id];\n}\nfunction header(name) {\n  const want = name.toLowerCase();\n  for (const key of Object.keys(headers)) {\n    if (String(key).toLowerCase() === want) {\n      const value = headers[key];\n      return Array.isArray(value) ? String(value[0] || '') : String(value == null ? '' : value);\n    }\n  }\n  return '';\n}\nfunction same(got, expected) {\n  if (!expected || got.length !== expected.length) return false;\n  let diff = 0;\n  for (let i = 0; i < expected.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);\n  return diff === 0;\n}\nconst secret = String($env.KIKO_RELAY_GET_KEY || '');\nif (!same(header('authorization'), secret ? ('Bearer ' + secret) : '')) {\n  return [{ json: { statusCode: 401, responseBody: { error: 'unauthorized' } } }];\n}\nconst query = item.query || item.params || {};\nconst jobId = String(query.job_id || '').trim();\nif (!jobId) {\n  return [{ json: { statusCode: 400, responseBody: { error: 'job_id required' } } }];\n}\nconst job = store.jobs[jobId];\nif (!job || typeof job.speech !== 'string') {\n  return [{ json: { statusCode: 404, responseBody: { pending: true } } }];\n}\ndelete store.jobs[jobId];\nreturn [{ json: { statusCode: 200, responseBody: { job_id: jobId, speech: job.speech } } }];"
+      },
+      "id": "c1a0b1d0-0001-4000-8000-000000000005",
+      "name": "Read and delete speech",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.responseBody }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "c1a0b1d0-0001-4000-8000-000000000006",
+      "name": "Reply to GET",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        820,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "POST kiko-result": {
+      "main": [
+        [
+          {
+            "node": "Store speech",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store speech": {
+      "main": [
+        [
+          {
+            "node": "Reply to POST",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET kiko-result": {
+      "main": [
+        [
+          {
+            "node": "Read and delete speech",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read and delete speech": {
+      "main": [
+        [
+          {
+            "node": "Reply to GET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "description": "INACTIVE import. Do not activate until the owner says so. Secrets come from n8n env KIKO_RELAY_POST_KEY and KIKO_RELAY_GET_KEY."
+  },
+  "tags": []
+}

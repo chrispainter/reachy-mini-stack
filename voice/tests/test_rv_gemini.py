@@ -196,6 +196,20 @@ def test_body_and_delegation_calls_in_one_message():
     assert [d.call_id for d in got["delegations"]] == ["c1"]
 
 
+def test_ask_kiko_is_non_blocking_and_targets_kiko():
+    fc = NS(id="k1", name="ask_kiko", args={"request": "what's on my calendar today"})
+    session = FakeSession([[msg(tool_call=NS(function_calls=[fc]))]])
+    engine = GeminiLiveEngine("m", "Kore", connect=FakeConnect(session), kiko_tool=True)
+    got, cb = recorder()
+    run(engine, cb)
+    d = got["delegations"][0]
+    assert (d.call_id, d.request, d.lane, d.target) == ("k1", "what's on my calendar today", "kiko", "kiko")
+    decls = {item.name: item for item in engine.config().tools[0].function_declarations}
+    assert decls["ask_kiko"].behavior == types.Behavior.NON_BLOCKING
+    plain = GeminiLiveEngine("m", "Kore", connect=FakeConnect(FakeSession([])))
+    assert "ask_kiko" not in {item.name for item in plain.config().tools[0].function_declarations}
+
+
 def test_config_without_body_tools_is_plan2():
     from reachy_voice.persona import BODY_PERSONA_SUFFIX
     cfg = GeminiLiveEngine("m", "Kore", connect=FakeConnect(FakeSession([])), body_tools=False).config()

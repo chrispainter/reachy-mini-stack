@@ -11,7 +11,8 @@ import numpy as np
 class Delegation:
     call_id: str
     request: str
-    lane: str  # "quick" | "task"
+    lane: str  # "quick" | "task" | "kiko"
+    target: str = "hermes"  # "hermes" | "kiko"
 
 
 @dataclass

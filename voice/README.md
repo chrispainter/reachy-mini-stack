@@ -66,6 +66,36 @@ go to Hermes through `ask_home_agent`; Hermes itself stays on the model in `hous
 
 `voice/deploy/deploy-voice.sh` copies `XAI_API_KEY` from the conversation-app `.env` when that line
 is present, and otherwise keeps the `XAI_API_KEY` and `VOICE_ENGINE` already in `voice.env`.
+The same rule covers `PERSONA_NAME`, `PERSONA_FILE`, and every `KIKO_*` line.
+
+## Kiko
+
+The default persona is still Reachy. `PERSONA_NAME=kiko` speaks as Kiko living in Reachy's body:
+short spoken replies, the same spoken-yes rule, `express` and `look` when the body is on, and
+`ask_home_agent` for lists and notes.
+
+`ask_kiko` is registered only when both `KIKO_WEBHOOK_URL` and `KIKO_RESULT_URL` are set. It is
+for calendar, email, research, messages and tasks. The robot POSTs the job to the Grok Bot routine
+webhook and polls a mailbox for the spoken reply. Both calls are outbound HTTPS. This process does
+not listen. Returned speech is capped and spoken; it is never run as a command. If the mailbox is
+still empty at `KIKO_TIMEOUT_S` (default 180, inside the pending window), Reachy says Kiko will
+follow up in the app.
+
+Names only, in `~/reachy-voice/voice.env` (mode 600). Values are never committed:
+
+```bash
+PERSONA_NAME=kiko
+KIKO_WEBHOOK_URL=
+KIKO_WEBHOOK_KEY=
+# KIKO_WEBHOOK_AUTH_HEADER=Authorization: Bearer <key>
+KIKO_RESULT_URL=
+KIKO_RESULT_KEY=
+# KIKO_RESULT_AUTH_HEADER=Authorization: Bearer <key>
+# KIKO_TIMEOUT_S=180
+```
+
+The webhook header default matches the Grok Bot routine panel: `Authorization: Bearer <key>`.
+Setup, the inactive n8n relay, and the tests are in `docs/kiko-relay.md`.
 
 ## Local test on the physical robot
 

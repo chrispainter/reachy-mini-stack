@@ -19,7 +19,13 @@ import websockets
 
 from reachy_voice.audio import mic_to_pcm16, pcm16_to_float
 from reachy_voice.engines.base import Delegation, EngineCallbacks
-from reachy_voice.persona import BODY_PERSONA_SUFFIX, BODY_TOOLS, PERSONA, TOOL_DESCRIPTION, TOOL_NAME, TOOL_PARAMS
+from reachy_voice.persona import (
+    BODY_TOOLS,
+    KIKO_TOOL_NAME,
+    PERSONA,
+    function_tools,
+    instructions,
+)
 from reachy_voice.policy import choose_lane
 
 RATE = 16000
@@ -42,10 +48,12 @@ class GrokLiveEngine:
     name = "grok"
 
     def __init__(self, model: str, voice: str, api_key: str = "", persona: str = PERSONA, connect=None,
-                 body_tools: bool = True) -> None:
+                 body_tools: bool = True, kiko_tool: bool = False, keyterms: list[str] | None = None) -> None:
         self._model, self._voice = model, voice
-        self._persona = persona + (BODY_PERSONA_SUFFIX if body_tools else "")
+        self._persona = instructions(persona, body_tools=body_tools, kiko_tool=kiko_tool)
         self._body_tools = body_tools
+        self._kiko_tool = kiko_tool
+        self._keyterms = list(keyterms) if keyterms else ["Reachy", "Jarvis"]
         self._connect = connect or (lambda: _open_socket(model, api_key))
         self._ws = self._rx = None
         self._cb: EngineCallbacks | None = None
@@ -59,12 +67,11 @@ class GrokLiveEngine:
         self._model_responding = False
 
     def session_update(self) -> dict:
-        tools = [{
-            "type": "function",
-            "name": TOOL_NAME,
-            "description": TOOL_DESCRIPTION,
-            "parameters": TOOL_PARAMS,
-        }]
+        tools = [
+            {"type": "function", "name": tool["name"], "description": tool["description"],
+             "parameters": tool["parameters"]}
+            for tool in function_tools(kiko=self._kiko_tool)
+        ]
         if self._body_tools:
             tools.extend(
                 {"type": "function", "name": tool["name"], "description": tool["description"],
@@ -85,7 +92,7 @@ class GrokLiveEngine:
                         "transcription": {
                             "model": "grok-transcribe",
                             "language_hint": "en",
-                            "keyterms": ["Reachy", "Jarvis"],
+                            "keyterms": self._keyterms,
                         },
                     },
                     "output": {"format": {"type": "audio/pcm", "rate": RATE}},
@@ -222,6 +229,9 @@ class GrokLiveEngine:
             await self._send_function_output(call_id, json.dumps({"ok": True}))
             return
         request = str(args.get("request", "")).strip()
+        if name == KIKO_TOOL_NAME and self._kiko_tool:
+            self._cb.on_delegation(Delegation(call_id=call_id, request=request, lane="kiko", target="kiko"))
+            return
         lane = args.get("lane") if args.get("lane") in ("quick", "task") else choose_lane(request)
         self._cb.on_delegation(Delegation(call_id=call_id, request=request, lane=lane))
 

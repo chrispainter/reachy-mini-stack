@@ -11,8 +11,9 @@ from reachy_voice.body import NullBody
 from reachy_voice.body_policy import CUES, EMOTIONS, ExpressionGate
 from reachy_voice.engines.base import Delegation, EngineCallbacks
 from reachy_voice.hermes import HermesError
+from reachy_voice.kiko import KikoError, KikoTimeout
 from reachy_voice.log import JsonlLog
-from reachy_voice.persona import FALLBACK_REPLY
+from reachy_voice.persona import FALLBACK_REPLY, KIKO_FALLBACK_REPLY, KIKO_TIMEOUT_REPLY
 from reachy_voice.policy import SessionPolicy
 
 RATE = 16000
@@ -28,8 +29,9 @@ class EngineStartError(Exception):
 class VoiceSession:
     def __init__(self, engine, audio, hermes, policy: SessionPolicy, speech_threshold: float, log: JsonlLog,
                  session_id: str, clock=time.monotonic, tick_s: float = 0.25, *, body=None, gate=None,
-                 picker=None) -> None:
+                 picker=None, kiko=None) -> None:
         self._engine, self._audio, self._hermes = engine, audio, hermes
+        self._kiko = kiko
         self._policy, self._log, self._session_id = policy, log, session_id
         self._clock, self._tick_s = clock, tick_s
         self._out = OutputActivity()
@@ -234,24 +236,17 @@ class VoiceSession:
     def _start_delegation(self, d: Delegation) -> None:
         started = self._clock()
         self._pending[d.call_id] = started
-        self._log.write("delegation", engine=self._engine.name, call_id=d.call_id, lane=d.lane, request=d.request)
+        self._log.write("delegation", engine=self._engine.name, call_id=d.call_id, lane=d.lane,
+                        target=d.target, request=d.request)
         self._try_express(CUES["handoff_start"], "cue")
         task = asyncio.create_task(self._handle_delegation(d, started))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
     async def _handle_delegation(self, d: Delegation, started: float) -> None:
-        ok = True
-        try:
-            if not d.request or not d.request.strip():
-                raise HermesError("empty request")
-            text = await self._hermes.ask(d.request, "unknown", d.lane, self._session_id)
-        except HermesError as exc:
-            ok, text = False, FALLBACK_REPLY
-            self._log.write("delegation_error", call_id=d.call_id, error=str(exc))
-        except Exception as exc:  # noqa: BLE001 - CancelledError is BaseException and still propagates
-            ok, text = False, FALLBACK_REPLY
-            self._log.write("delegation_error", call_id=d.call_id, error=repr(exc))
+        # The spoken "Let me check" is the model's own line. The tool is non-blocking,
+        # and the persona tells it to say that before this wait returns.
+        ok, text = await self._delegation_text(d)
         self._try_express(CUES["handoff_ok" if ok else "handoff_failed"], "cue")
         try:
             await self._engine.deliver(d.call_id, text)
@@ -261,5 +256,24 @@ class VoiceSession:
         finally:
             self._pending.pop(d.call_id, None)
             self._last_delivery = self._clock()
-            self._log.write("delegation_result", call_id=d.call_id, lane=d.lane, ok=ok,
+            self._log.write("delegation_result", call_id=d.call_id, lane=d.lane, target=d.target, ok=ok,
                             seconds=round(self._clock() - started, 2))
+
+    async def _delegation_text(self, d: Delegation) -> tuple[bool, str]:
+        try:
+            if not d.request or not d.request.strip():
+                raise KikoError("empty request") if d.target == "kiko" else HermesError("empty request")
+            if d.target == "kiko":
+                if self._kiko is None:
+                    raise KikoError("kiko not configured")
+                return True, await self._kiko.ask(d.request)
+            return True, await self._hermes.ask(d.request, "unknown", d.lane, self._session_id)
+        except KikoTimeout:
+            self._log.write("delegation_error", call_id=d.call_id, error="timeout")
+            return False, KIKO_TIMEOUT_REPLY
+        except (HermesError, KikoError) as exc:
+            self._log.write("delegation_error", call_id=d.call_id, error=str(exc))
+            return False, KIKO_FALLBACK_REPLY if d.target == "kiko" else FALLBACK_REPLY
+        except Exception as exc:  # noqa: BLE001 - CancelledError is BaseException and still propagates
+            self._log.write("delegation_error", call_id=d.call_id, error=repr(exc))
+            return False, KIKO_FALLBACK_REPLY if d.target == "kiko" else FALLBACK_REPLY

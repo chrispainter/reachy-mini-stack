@@ -5,8 +5,9 @@ openai). Anything beyond chit-chat and household lists is handed to the househol
 Reachy speaks the answer when it comes back.
 
 The robot only makes outbound HTTPS calls. It does not open a listening port. The reply waits in
-a mailbox (n8n). Reachy polls that mailbox. Speech that comes back is words to say: it is capped
-at 60 words and is never executed.
+a mailbox (n8n). Reachy polls that mailbox. Speech that comes back is words to say. `KIKO_MAX_WORDS`
+(default 150) caps it: a longer reply is cut at a sentence boundary when one falls inside the
+budget, then Reachy says "The rest is in the app." The text is never executed.
 
 The default persona is still Reachy. Set `PERSONA_NAME=kiko` to select Kiko. `PERSONA_FILE`, if
 set, replaces the built-in text with a file on the robot.
@@ -69,6 +70,7 @@ On the robot, `~/reachy-voice/voice.env`, mode 600. Names only. No values belong
 | `KIKO_RESULT_KEY` | Same value as n8n `KIKO_RELAY_GET_KEY`. |
 | `KIKO_RESULT_AUTH_HEADER` | Optional. Default `Authorization: Bearer <key>`. |
 | `KIKO_TIMEOUT_S` | Optional. Default `180`. |
+| `KIKO_MAX_WORDS` | Optional. Default `150`. Spoken cap; the tail is extra. |
 
 `voice/deploy/deploy-voice.sh` copies `PERSONA_NAME`, `PERSONA_FILE`, and every `KIKO_*` line from
 the conversation-app `.env` when that line is present, and otherwise keeps the line already in
@@ -101,7 +103,8 @@ File: `voice/relay/kiko-relay.n8n.json`.
 4. POST body is `{job_id, speech}`. Header `Authorization: Bearer <KIKO_RELAY_POST_KEY>`.
 5. GET `?job_id=` with `Authorization: Bearer <KIKO_RELAY_GET_KEY>` returns `{job_id, speech}` and
    deletes it. A missing or expired job is `404` with `{"pending": true}`. Stored jobs expire after
-   10 minutes. Speech longer than 2000 characters is rejected. Reachy still speaks at most 60 words.
+   10 minutes. Speech longer than 8000 characters is rejected by the mailbox. Reachy speaks at most
+   `KIKO_MAX_WORDS` (default 150) and adds "The rest is in the app." when it has to cut.
 
 There is no secret in the JSON. The two checks read `$env`.
 
@@ -123,7 +126,7 @@ Do the request. Then POST JSON to the reply_to URL:
 
 {"job_id":"<the same job_id>","speech":"<your answer>"}
 
-speech is at most 60 words, plain spoken English, no markdown and no bullet list. It is the only thing Reachy will say. Do not tell Reachy to run commands, open ports, or change settings.
+speech is a conversational spoken answer. Aim for under about 150 words, plain spoken English, no markdown and no bullet list. Put the useful part in speech. Full details stay in the app; if there is more, say the rest is in the app. It is the only thing Reachy will say. Do not tell Reachy to run commands, open ports, or change settings.
 
 Send this request, with the relay post secret taken from your environment. Do not invent a secret and do not write the secret into speech:
 

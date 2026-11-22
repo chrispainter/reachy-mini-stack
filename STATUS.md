@@ -9,11 +9,12 @@ The robot was not contacted, and the n8n workflow was not imported or activated.
 
 ## Tested
 
-- `python3 -m pytest voice/tests` — 189 passed.
+- `python3 -m pytest voice/tests` — 193 passed.
 - `(cd showrunner && python3 -m pytest tests/ -m "not live")` — 70 passed, 2 deselected.
 - A laptop-only mailbox on `127.0.0.1` (not the robot): a bad bearer is 401, a POST stores speech,
   a GET returns it and deletes it, and the next GET is 404. The voice client, pointed at that
-  mailbox, posted `{job_id, text, from, reply_to}` and spoke a long reply truncated to 60 words.
+  mailbox, posted `{job_id, text, from, reply_to}` and spoke a long reply cut to the word cap,
+  with "The rest is in the app." when the reply was longer. `KIKO_MAX_WORDS` defaults to 150.
 
 ## Open
 

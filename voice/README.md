@@ -77,9 +77,10 @@ short spoken replies, the same spoken-yes rule, `express` and `look` when the bo
 `ask_kiko` is registered only when both `KIKO_WEBHOOK_URL` and `KIKO_RESULT_URL` are set. It is
 for calendar, email, research, messages and tasks. The robot POSTs the job to the Grok Bot routine
 webhook and polls a mailbox for the spoken reply. Both calls are outbound HTTPS. This process does
-not listen. Returned speech is capped and spoken; it is never run as a command. If the mailbox is
-still empty at `KIKO_TIMEOUT_S` (default 180, inside the pending window), Reachy says Kiko will
-follow up in the app.
+not listen. Returned speech is spoken, never run as a command. `KIKO_MAX_WORDS` (default 150)
+caps it. A longer reply is cut at a sentence boundary where that fits, then Reachy adds "The rest
+is in the app." If the mailbox is still empty at `KIKO_TIMEOUT_S` (default 180, inside the pending
+window), Reachy says Kiko will follow up in the app.
 
 Names only, in `~/reachy-voice/voice.env` (mode 600). Values are never committed:
 
@@ -92,6 +93,7 @@ KIKO_RESULT_URL=
 KIKO_RESULT_KEY=
 # KIKO_RESULT_AUTH_HEADER=Authorization: Bearer <key>
 # KIKO_TIMEOUT_S=180
+# KIKO_MAX_WORDS=150
 ```
 
 The webhook header default matches the Grok Bot routine panel: `Authorization: Bearer <key>`.

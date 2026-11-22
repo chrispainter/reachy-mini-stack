@@ -155,6 +155,7 @@ def make_kiko(settings: Settings) -> KikoClient | None:
         result_key=settings.kiko_result_key,
         result_auth_header=settings.kiko_result_auth_header,
         timeout_s=bounded_timeout(settings.kiko_timeout_s, settings.pending_max_s),
+        max_words=settings.kiko_max_words,
     )
 
 

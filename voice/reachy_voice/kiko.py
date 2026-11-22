@@ -13,10 +13,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-SPEECH_WORD_CAP = 60
-SPEECH_CHAR_CAP = 600
+DEFAULT_MAX_WORDS = 150
+SPEECH_TAIL = "The rest is in the app."
 POLL_INTERVAL_S = 3.0
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_CHAR_PER_WORD = 40
 
 
 class KikoError(Exception):
@@ -53,20 +54,55 @@ def authorization_header(spec: str, key: str) -> tuple[str, str]:
     return name, key
 
 
-def speech_to_say(raw: object) -> str:
-    """Plain spoken text. Not executed, and not longer than the spoken cap."""
+def speech_to_say(raw: object, max_words: int = DEFAULT_MAX_WORDS) -> str:
+    """Plain spoken text. Not executed. Longer than max_words is cut and tailed.
+
+    A cut prefers the last sentence end inside the word budget. The tail is extra,
+    so the person hears that the rest is in the app.
+    """
     if not isinstance(raw, str):
         raise KikoError("speech was not text")
+    if isinstance(max_words, bool) or not isinstance(max_words, int) or max_words < 1:
+        raise KikoError("speech cap must be a positive integer")
     text = " ".join(_CONTROL.sub(" ", raw).split())
-    words = text.split(" ")
-    if len(words) > SPEECH_WORD_CAP:
-        text = " ".join(words[:SPEECH_WORD_CAP])
-    if len(text) > SPEECH_CHAR_CAP:
-        cut = text[:SPEECH_CHAR_CAP]
-        text = (cut.rsplit(" ", 1)[0] or cut).strip()
     if not text:
         raise KikoError("empty speech")
-    return text
+    words = text.split(" ")
+    if len(words) <= max_words:
+        return _cap_chars(text, max_words)
+    window = words[:max_words]
+    cut = _last_sentence(window)
+    head = " ".join(window[:cut] if cut else window).strip()
+    if not head:
+        head = " ".join(window).strip()
+    return _cap_chars(f"{head} {SPEECH_TAIL}", max_words)
+
+
+def _last_sentence(words: list[str]) -> int | None:
+    """How many leading words end on a sentence, or None if none do."""
+    last = None
+    for i, word in enumerate(words):
+        token = word.rstrip("\"'”’)")
+        if token.endswith((".", "!", "?")):
+            last = i + 1
+    return last
+
+
+def _cap_chars(text: str, max_words: int) -> str:
+    """Backstop for a no-space blob. A normal answer under the word cap fits."""
+    ceiling = max(2000, max_words * _CHAR_PER_WORD)
+    if len(text) <= ceiling:
+        return text
+    if text.endswith(SPEECH_TAIL):
+        room = ceiling - len(SPEECH_TAIL) - 1
+        head = text[: -(len(SPEECH_TAIL) + 1)]
+        if room < 1:
+            return SPEECH_TAIL
+        trimmed = head[:room]
+        head = (trimmed.rsplit(" ", 1)[0] or trimmed).strip()
+        return f"{head} {SPEECH_TAIL}".strip() if head else SPEECH_TAIL
+    cut = text[:ceiling]
+    return (cut.rsplit(" ", 1)[0] or cut).strip()
 
 
 def _with_job_id(url: str, job_id: str) -> str:
@@ -81,6 +117,7 @@ class KikoClient:
                  webhook_auth_header: str = "Authorization: Bearer <key>",
                  result_auth_header: str = "Authorization: Bearer <key>",
                  timeout_s: float = 180.0, poll_s: float = POLL_INTERVAL_S,
+                 max_words: int = DEFAULT_MAX_WORDS,
                  transport: httpx.AsyncBaseTransport | None = None,
                  sleep=asyncio.sleep, clock=time.monotonic) -> None:
         self._webhook_url = webhook_url.strip()
@@ -91,6 +128,7 @@ class KikoClient:
         self._result_auth = result_auth_header
         self._timeout_s = timeout_s
         self._poll_s = poll_s
+        self._max_words = max_words
         self._sleep = sleep
         self._clock = clock
         self._client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(20.0, connect=5.0))
@@ -109,7 +147,7 @@ class KikoClient:
         while True:
             found = await self._poll(job_id)
             if found is not None:
-                return speech_to_say(found)
+                return speech_to_say(found, self._max_words)
             if self._clock() >= deadline:
                 raise KikoTimeout("timed out waiting for Kiko")
             await self._sleep(min(self._poll_s, max(0.0, deadline - self._clock())))

@@ -12,7 +12,8 @@ from google.genai import types
 from reachy_voice.config import load_settings
 from reachy_voice.engines import make_engine
 from reachy_voice.kiko import (
-    SPEECH_WORD_CAP,
+    DEFAULT_MAX_WORDS,
+    SPEECH_TAIL,
     KikoClient,
     KikoError,
     KikoTimeout,
@@ -138,11 +139,51 @@ def test_untrusted_long_speech_is_truncated_and_not_executed(tmp_path):
 
     out = run(client(handler))
     assert out == speech_to_say(payload)
-    assert len(out.split()) == SPEECH_WORD_CAP
+    assert SPEECH_TAIL not in out
+    assert len(out.split()) < DEFAULT_MAX_WORDS
     assert "\x00" not in out and "\n" not in out
     assert out.split()[:4] == ["hello", "there", "please", "run"]
     assert not marker.exists()
     assert isinstance(out, str)
+
+
+def test_default_word_cap_is_150_and_overage_gets_a_spoken_tail():
+    assert DEFAULT_MAX_WORDS == 150
+    assert load_settings(KEYS).kiko_max_words == 150
+    exact = " ".join(["word"] * 150)
+    assert speech_to_say(exact) == exact
+    over = speech_to_say(" ".join(["word"] * 151))
+    assert over.endswith(SPEECH_TAIL)
+    assert over[: -len(SPEECH_TAIL)].split() == ["word"] * 150
+
+
+def test_custom_max_words_truncates_with_the_tail():
+    out = speech_to_say(" ".join(["alpha"] * 20), max_words=5)
+    assert out == "alpha alpha alpha alpha alpha " + SPEECH_TAIL
+    assert load_settings({**KEYS, "KIKO_MAX_WORDS": "80"}).kiko_max_words == 80
+    with pytest.raises(ValueError, match="KIKO_MAX_WORDS"):
+        load_settings({**KEYS, "KIKO_MAX_WORDS": "0"})
+    with pytest.raises(ValueError, match="KIKO_MAX_WORDS"):
+        load_settings({**KEYS, "KIKO_MAX_WORDS": "nope"})
+
+
+def test_truncation_stops_at_a_sentence_boundary():
+    text = "Meet at three. Then we talk about the rest of the week in detail."
+    assert speech_to_say(text, max_words=8) == "Meet at three. " + SPEECH_TAIL
+    question = "Are you free? The afternoon is full of other things to mention here."
+    assert speech_to_say(question, max_words=6) == "Are you free? " + SPEECH_TAIL
+
+
+def test_client_uses_the_configured_word_cap():
+    payload = "Meet at three. " + " ".join(["detail"] * 40)
+
+    def handler(request: httpx.Request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={"speech": payload})
+
+    out = run(client(handler, max_words=6))
+    assert out == "Meet at three. " + SPEECH_TAIL
 
 
 def test_non_text_speech_is_refused():

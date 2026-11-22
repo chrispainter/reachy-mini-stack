@@ -45,6 +45,7 @@ class Settings:
     kiko_result_key: str = field(default="", repr=False)
     kiko_result_auth_header: str = DEFAULT_KIKO_AUTH_HEADER
     kiko_timeout_s: float = 180.0
+    kiko_max_words: int = 150
 
     def has_engine(self, name: str) -> bool:
         keys = {"gemini": self.gemini_api_key, "openai": self.openai_api_key, "grok": self.xai_api_key}
@@ -66,6 +67,14 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     def number(name: str, default: float) -> float:
         value = env.get(name, "")
         return float(value) if value and value.strip() else default
+
+    def whole(name: str, default: int) -> int:
+        value = (env.get(name) or "").strip()
+        if not value:
+            return default
+        if not value.isdigit() or int(value) <= 0:
+            raise ValueError(f"{name} must be a positive integer, got {value!r}")
+        return int(value)
 
     def flag(name: str, default: bool) -> bool:
         value = (env.get(name) or "").strip().lower()
@@ -112,6 +121,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         kiko_result_key=text("KIKO_RESULT_KEY", ""),
         kiko_result_auth_header=text("KIKO_RESULT_AUTH_HEADER", d.kiko_result_auth_header),
         kiko_timeout_s=number("KIKO_TIMEOUT_S", d.kiko_timeout_s),
+        kiko_max_words=whole("KIKO_MAX_WORDS", d.kiko_max_words),
     )
     if s.kiko_timeout_s <= 0:
         raise ValueError("KIKO_TIMEOUT_S must be positive")

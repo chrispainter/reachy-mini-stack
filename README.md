@@ -42,7 +42,7 @@ run-clawbody.sh    Start ClawBody (Gradio web UI on :7860)
 
 ## Voice on the robot
 
-The household voice app is `voice/`. It runs on the Reachy Mini, next to `reachy-mini-daemon`, and does not open a listening port. Engines are Gemini, OpenAI, and Grok. Grok is `VOICE_ENGINE=grok` plus `XAI_API_KEY` in `~/reachy-voice/voice.env` on the robot. `PERSONA_NAME=kiko` makes that voice speak as Kiko and, when `KIKO_WEBHOOK_URL` and `KIKO_RESULT_URL` are both set, hand real requests to the household Grok Bot through an outbound webhook and a polled mailbox. The default persona stays Reachy. Versions, the config switch, and the physical-robot smoke test are in `voice/README.md`. The relay is `docs/kiko-relay.md`. Current deploy state is `STATUS.md`.
+The household voice app is `voice/`. It runs on the Reachy Mini, next to `reachy-mini-daemon`, and does not open a listening port. Engines are Gemini, OpenAI, and Grok. Grok is `VOICE_ENGINE=grok` plus `XAI_API_KEY` in `~/reachy-voice/voice.env` on the robot. `PERSONA_NAME=kiko` makes that voice speak as Kiko and, when `KIKO_WEBHOOK_URL` and `KIKO_RESULT_URL` are both set, hand real requests to the household Grok Bot through an outbound webhook and a polled mailbox. Spoken replies are capped by `KIKO_MAX_WORDS` (default 150). The default persona stays Reachy. Versions, the config switch, and the physical-robot smoke test are in `voice/README.md`. The relay is `docs/kiko-relay.md`. Current deploy state is `STATUS.md`.
 
 ## OpenClaw bridge — to be wired up
 

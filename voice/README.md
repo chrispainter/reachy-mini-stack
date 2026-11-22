@@ -97,7 +97,8 @@ KIKO_RESULT_KEY=
 ```
 
 The webhook header default matches the Grok Bot routine panel: `Authorization: Bearer <key>`.
-Setup, the inactive n8n relay, and the tests are in `docs/kiko-relay.md`.
+The mailbox is `https://buildflows.cloud/webhook/kiko-result`. A bad key there is HTTP 403.
+Setup and the tests are in `docs/kiko-relay.md`.
 
 ## Local test on the physical robot
 

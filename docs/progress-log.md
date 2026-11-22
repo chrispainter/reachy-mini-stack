@@ -15,3 +15,12 @@ app." The Grok Bot routine is asked for a conversational answer around that leng
 detail left in the app. `deploy-voice.sh` carries `KIKO_MAX_WORDS` when that line is present.
 
 Voice tests after the cap change: 193 passed. Showrunner tests: 70 passed, 2 deselected (`not live`).
+
+The live mailbox is `https://buildflows.cloud/webhook/kiko-result` (workflow `kikoRsltRelay01`,
+name `Kiko result relay`). It uses two n8n Header Auth credentials, not container env, so n8n did
+not need a restart. A wrong or missing key is HTTP 403 text `Authorization data is wrong!`.
+Reachy treats 401 and 403 as auth failure, stops polling, logs `delegation_error` with `auth`,
+and says Kiko will follow up in the app. The keys stay in `/root/kiko-relay-secrets.env` (mode
+600). The robot's `KIKO_RESULT_KEY` matches `KIKO_RELAY_GET_KEY`.
+
+Voice tests after the auth change: 196 passed. Showrunner tests: 70 passed, 2 deselected (`not live`).

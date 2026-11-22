@@ -33,9 +33,18 @@ grok.com automation webhooks are a different product. They use Standard Webhooks
 (`webhook-id`, `webhook-timestamp`, `webhook-signature`) and return `202`. This client does not
 sign those requests. Use a Grok Bot routine.
 
-The mailbox uses the same header shape with a **different** secret (`KIKO_RESULT_KEY` on the
-robot, `KIKO_RELAY_GET_KEY` in n8n). Kiko's POST into the mailbox uses `KIKO_RELAY_POST_KEY`.
-The robot never has the post secret.
+The mailbox is already live: `https://buildflows.cloud/webhook/kiko-result` (workflow
+`kikoRsltRelay01`, name `Kiko result relay`). POST and GET share that URL. n8n checks the
+`Authorization` header with two Header Auth credentials, `Kiko relay POST` and `Kiko relay GET`.
+Each credential's header name is `Authorization` and its value is `Bearer` plus the key. A wrong
+or missing key never reaches the workflow: n8n returns **403** with the text
+`Authorization data is wrong!`, not a JSON 401. Reachy treats 401 and 403 as auth failure, stops
+polling, and says Kiko will follow up in the app.
+
+The keys are on the VPS in `/root/kiko-relay-secrets.env` (mode 600), names
+`KIKO_RELAY_POST_KEY` and `KIKO_RELAY_GET_KEY`. They are not container env and not in git. The
+robot's `KIKO_RESULT_KEY` is the same value as `KIKO_RELAY_GET_KEY`. Kiko's POST uses
+`KIKO_RELAY_POST_KEY`. The robot never has the post secret.
 
 ## What the robot sends
 
@@ -76,37 +85,39 @@ On the robot, `~/reachy-voice/voice.env`, mode 600. Names only. No values belong
 the conversation-app `.env` when that line is present, and otherwise keeps the line already in
 `voice.env`. It does not print the values.
 
-n8n env (not voice.env):
+Relay secrets (not voice.env, and not n8n container env):
 
-| Name | Role |
+| Name | Where |
 | --- | --- |
-| `KIKO_RELAY_POST_KEY` | Kiko's POST into the mailbox. |
-| `KIKO_RELAY_GET_KEY` | Reachy's GET. Same value as `KIKO_RESULT_KEY`. |
+| `KIKO_RELAY_POST_KEY` | `/root/kiko-relay-secrets.env` on the VPS (mode 600). Header Auth credential `Kiko relay POST`. Kiko's POST. |
+| `KIKO_RELAY_GET_KEY` | Same file. Header Auth credential `Kiko relay GET`. Same value as the robot's `KIKO_RESULT_KEY`. |
 
-The Grok Bot needs `KIKO_RELAY_POST_KEY` in whatever secret store that routine can read. This repo
-does not set that. Whether a routine can read an arbitrary env var is the Bot's own setup; the
-prompt below tells it to take the secret from its environment and not to hardcode it.
+No container env and no n8n restart. Create the two Header Auth credentials in n8n (header name
+`Authorization`, value `Bearer` plus the key from that file). The Grok Bot still needs
+`KIKO_RELAY_POST_KEY` in whatever secret store that routine can read. This repo does not set that.
 
-## n8n relay (import inactive)
+## n8n relay
 
-File: `voice/relay/kiko-relay.n8n.json`.
+Live URL: `https://buildflows.cloud/webhook/kiko-result`
 
-`active` is false. Importing it must not turn it on. Do not activate it until you mean to.
+Workflow id `kikoRsltRelay01`, name `Kiko result relay`. The definition in git is
+`voice/relay/kiko-relay.n8n.json`. It references the credentials by name only. `active` in that
+file is false so a fresh import does not start a second copy. The running workflow is already on.
 
-1. In n8n (buildflows.cloud), set `KIKO_RELAY_POST_KEY` and `KIKO_RELAY_GET_KEY`. Env access inside
-   the Code node must be allowed (`N8N_BLOCK_ENV_ACCESS_IN_NODE` must not block `$env`). If it is
-   blocked, the checks fail closed (401) until you point the Code nodes at a credential instead.
-2. Import `voice/relay/kiko-relay.n8n.json`. Leave the workflow inactive. Confirm the editor still
-   shows it off.
-3. When you do activate it, the production URL is the webhook path `kiko-result` on that n8n host
-   (POST and GET on the same path). Put that URL in `KIKO_RESULT_URL`.
-4. POST body is `{job_id, speech}`. Header `Authorization: Bearer <KIKO_RELAY_POST_KEY>`.
-5. GET `?job_id=` with `Authorization: Bearer <KIKO_RELAY_GET_KEY>` returns `{job_id, speech}` and
-   deletes it. A missing or expired job is `404` with `{"pending": true}`. Stored jobs expire after
-   10 minutes. Speech longer than 8000 characters is rejected by the mailbox. Reachy speaks at most
-   `KIKO_MAX_WORDS` (default 150) and adds "The rest is in the app." when it has to cut.
+1. In n8n, create two Header Auth credentials: `Kiko relay POST` and `Kiko relay GET`. Header name
+   `Authorization`. Value `Bearer` plus the matching key from `/root/kiko-relay-secrets.env`. Do
+   not put the keys in container env. Do not restart n8n.
+2. The live workflow already uses those credentials. Re-importing the JSON should map each webhook
+   to the credential of the same name.
+3. `KIKO_RESULT_URL` on the robot is `https://buildflows.cloud/webhook/kiko-result`.
+4. POST body is `{job_id, speech}`. Header `Authorization: Bearer` plus `KIKO_RELAY_POST_KEY`.
+5. GET `?job_id=` with `Authorization: Bearer` plus `KIKO_RELAY_GET_KEY` returns `{job_id, speech}`
+   and deletes it. A missing or expired job is `404` with `{"pending": true}`. A missing `job_id`
+   is `400`. Stored jobs expire after 10 minutes. Speech longer than 8000 characters is rejected.
+   Reachy speaks at most `KIKO_MAX_WORDS` (default 150) and adds "The rest is in the app." when it
+   has to cut. A bad or missing mailbox key is **403** text `Authorization data is wrong!`.
 
-There is no secret in the JSON. The two checks read `$env`.
+There is no secret in the JSON. The Code nodes do not read `$env`.
 
 ## Routine prompt
 
@@ -182,12 +193,19 @@ class Handler(BaseHTTPRequestHandler):
             open("/tmp/kiko-job.json", "w").write(json.dumps(raw))
             return self._json(200, {"ok": True})
         if not self._ok(POST_KEY):
-            return self._json(401, {"error": "unauthorized"})
+            return self._denied()
         jobs[str(raw.get("job_id", ""))] = raw.get("speech", "")
         return self._json(200, {"ok": True})
+    def _denied(self):
+        body = b"Authorization data is wrong!"
+        self.send_response(403)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
     def do_GET(self):
         if not self._ok(GET_KEY):
-            return self._json(401, {"error": "unauthorized"})
+            return self._denied()
         job_id = ""
         if "job_id=" in self.path:
             job_id = self.path.split("job_id=", 1)[1].split("&", 1)[0]
@@ -203,8 +221,8 @@ PY
 In a second terminal, still on the laptop:
 
 ```bash
-# Wrong key is rejected.
-curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8765/kiko-result \
+# Wrong key is rejected the way n8n Header Auth rejects it.
+curl -sS -w "\n%{http_code}\n" -X POST http://127.0.0.1:8765/kiko-result \
   -H "Authorization: Bearer wrong" -H "Content-Type: application/json" \
   -d '{"job_id":"j1","speech":"nope"}'
 
@@ -223,8 +241,9 @@ curl -sS -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:8765/kiko-result?job
   -H "Authorization: Bearer $KIKO_RELAY_GET_KEY"
 ```
 
-Expect `401`, then `{"ok": true}`, then `{"job_id": "j1", "speech": "You are free at three."}`, then `404`.
-Stop the mailbox with Ctrl-C. Nothing here is deployed.
+Expect the text `Authorization data is wrong!` and status `403`, then `{"ok": true}`, then
+`{"job_id": "j1", "speech": "You are free at three."}`, then `404`. Stop the mailbox with Ctrl-C.
+This stand-in is not the live relay. The live URL is `https://buildflows.cloud/webhook/kiko-result`.
 
 ## On the robot
 

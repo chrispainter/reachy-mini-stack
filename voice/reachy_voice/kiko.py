@@ -28,6 +28,10 @@ class KikoTimeout(KikoError):
     """The mailbox had no speech before KIKO_TIMEOUT_S."""
 
 
+class KikoAuthError(KikoError):
+    """The key was rejected. Stop. Do not keep polling."""
+
+
 def bounded_timeout(timeout_s: float, pending_max_s: float) -> float:
     """Keep the wait inside the session pending window so the follow-up can be spoken."""
     ceiling = max(1.0, pending_max_s - 15.0)
@@ -157,10 +161,16 @@ class KikoClient:
         body = {"job_id": job_id, "text": text, "from": "reachy", "reply_to": self._result_url}
         try:
             response = await self._client.post(self._webhook_url, json=body, headers={name: value})
-            response.raise_for_status()
         except KikoError:
             raise
         except Exception as exc:  # noqa: BLE001 - httpx errors and bad URLs become a spoken fallback
+            raise KikoError(self._http_error("webhook", exc)) from exc
+        self._raise_if_auth(response)
+        try:
+            response.raise_for_status()
+        except KikoError:
+            raise
+        except Exception as exc:  # noqa: BLE001
             raise KikoError(self._http_error("webhook", exc)) from exc
 
     async def _poll(self, job_id: str) -> str | None:
@@ -172,8 +182,7 @@ class KikoClient:
             if self._fatal_transport(exc):
                 raise KikoError(self._http_error("result", exc)) from exc
             return None
-        if response.status_code in (401, 403):
-            raise KikoError(f"result mailbox rejected the key ({response.status_code})")
+        self._raise_if_auth(response)
         if response.status_code == 404:
             return None
         if response.status_code >= 500:
@@ -194,6 +203,12 @@ class KikoClient:
         if not isinstance(speech, str):
             raise KikoError("speech was not text")
         return speech
+
+    @staticmethod
+    def _raise_if_auth(response: httpx.Response) -> None:
+        """401 or 403 is a bad key. n8n Header Auth answers 403 with plain text."""
+        if response.status_code in (401, 403):
+            raise KikoAuthError("auth")
 
     @staticmethod
     def _fatal_transport(exc: Exception) -> bool:

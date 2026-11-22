@@ -7,7 +7,7 @@ import pytest
 from reachy_voice.body_policy import ExpressionGate
 from reachy_voice.engines.base import Delegation
 from reachy_voice.hermes import HermesError
-from reachy_voice.kiko import KikoError, KikoTimeout
+from reachy_voice.kiko import KikoAuthError, KikoError, KikoTimeout
 from reachy_voice.log import JsonlLog
 from reachy_voice.persona import FALLBACK_REPLY, KIKO_FALLBACK_REPLY, KIKO_TIMEOUT_REPLY
 from reachy_voice.policy import SessionPolicy
@@ -421,6 +421,15 @@ def test_kiko_timeout_says_it_will_follow_up(tmp_path):
     assert engine.delivered == [("c9", KIKO_TIMEOUT_REPLY)]
     err = [e for e in events(path) if e["event"] == "delegation_error"][0]
     assert err["error"] == "timeout"
+
+
+def test_kiko_auth_failure_logs_auth_and_says_follow_up(tmp_path):
+    engine = FakeEngine(on_start=_kiko_delegate)
+    s, path = make(engine, FakeAudio(), FakeHermes(), tmp_path, kiko=FakeKiko(fail=KikoAuthError("auth")))
+    asyncio.run(s.run())
+    assert engine.delivered == [("c9", KIKO_TIMEOUT_REPLY)]
+    err = [e for e in events(path) if e["event"] == "delegation_error"][0]
+    assert err["error"] == "auth"
 
 
 def test_kiko_failure_uses_the_kiko_fallback(tmp_path):

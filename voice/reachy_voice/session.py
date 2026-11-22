@@ -11,7 +11,7 @@ from reachy_voice.body import NullBody
 from reachy_voice.body_policy import CUES, EMOTIONS, ExpressionGate
 from reachy_voice.engines.base import Delegation, EngineCallbacks
 from reachy_voice.hermes import HermesError
-from reachy_voice.kiko import KikoError, KikoTimeout
+from reachy_voice.kiko import KikoAuthError, KikoError, KikoTimeout
 from reachy_voice.log import JsonlLog
 from reachy_voice.persona import FALLBACK_REPLY, KIKO_FALLBACK_REPLY, KIKO_TIMEOUT_REPLY
 from reachy_voice.policy import SessionPolicy
@@ -270,6 +270,9 @@ class VoiceSession:
             return True, await self._hermes.ask(d.request, "unknown", d.lane, self._session_id)
         except KikoTimeout:
             self._log.write("delegation_error", call_id=d.call_id, error="timeout")
+            return False, KIKO_TIMEOUT_REPLY
+        except KikoAuthError:
+            self._log.write("delegation_error", call_id=d.call_id, error="auth")
             return False, KIKO_TIMEOUT_REPLY
         except (HermesError, KikoError) as exc:
             self._log.write("delegation_error", call_id=d.call_id, error=str(exc))

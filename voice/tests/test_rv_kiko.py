@@ -14,6 +14,7 @@ from reachy_voice.engines import make_engine
 from reachy_voice.kiko import (
     DEFAULT_MAX_WORDS,
     SPEECH_TAIL,
+    KikoAuthError,
     KikoClient,
     KikoError,
     KikoTimeout,
@@ -111,8 +112,10 @@ def test_timeout_after_an_empty_mailbox():
     assert clock["t"] >= 0.05
 
 
-def test_mailbox_auth_failure_does_not_wait_for_the_timeout():
+@pytest.mark.parametrize("status", [401, 403])
+def test_mailbox_auth_failure_stops_polling(status):
     slept = {"n": 0}
+    polls = {"n": 0}
 
     async def sleep(seconds):
         slept["n"] += 1
@@ -120,11 +123,25 @@ def test_mailbox_auth_failure_does_not_wait_for_the_timeout():
     def handler(request: httpx.Request):
         if request.method == "POST":
             return httpx.Response(200, json={"ok": True})
-        return httpx.Response(401, json={"error": "unauthorized"})
+        polls["n"] += 1
+        return httpx.Response(status, text="Authorization data is wrong!")
 
-    with pytest.raises(KikoError, match="401"):
+    with pytest.raises(KikoAuthError):
         run(client(handler, timeout_s=30, sleep=sleep))
-    assert slept["n"] == 0
+    assert polls["n"] == 1 and slept["n"] == 0
+
+
+def test_webhook_403_does_not_poll():
+    seen = {"get": 0}
+
+    def handler(request: httpx.Request):
+        if request.method == "GET":
+            seen["get"] += 1
+        return httpx.Response(403, text="Authorization data is wrong!")
+
+    with pytest.raises(KikoAuthError):
+        run(client(handler))
+    assert seen["get"] == 0
 
 
 def test_untrusted_long_speech_is_truncated_and_not_executed(tmp_path):
@@ -249,13 +266,19 @@ def test_timeout_stays_inside_the_pending_window():
     assert bounded_timeout(400, 330) == 315
 
 
-def test_relay_workflow_is_inactive_and_stores_no_secret():
+def test_relay_workflow_uses_header_auth_and_stores_no_secret():
     path = Path(__file__).resolve().parents[1] / "relay" / "kiko-relay.n8n.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     text = path.read_text(encoding="utf-8")
+    assert data["name"] == "Kiko result relay"
     assert data["active"] is False
-    methods = {node["parameters"]["httpMethod"] for node in data["nodes"] if node["type"].endswith("webhook")}
-    assert methods == {"POST", "GET"}
-    assert all(node["parameters"]["path"] == "kiko-result" for node in data["nodes"] if node["type"].endswith("webhook"))
-    assert "KIKO_RELAY_POST_KEY" in text and "KIKO_RELAY_GET_KEY" in text
+    hooks = [node for node in data["nodes"] if node["type"].endswith("webhook")]
+    assert {node["parameters"]["httpMethod"] for node in hooks} == {"POST", "GET"}
+    assert {node["parameters"]["authentication"] for node in hooks} == {"headerAuth"}
+    assert {node["credentials"]["httpHeaderAuth"]["name"] for node in hooks} == {
+        "Kiko relay POST", "Kiko relay GET"}
+    assert all("id" not in node["credentials"]["httpHeaderAuth"] for node in hooks)
+    code = "\n".join(node["parameters"].get("jsCode", "") for node in data["nodes"])
+    assert "$env" not in text and "function header" not in code
+    assert "8000" in code and "pending: true" in code and "delete store.jobs" in code
     assert not re.search(r"Bearer [A-Za-z0-9_\-]{8,}", text)
